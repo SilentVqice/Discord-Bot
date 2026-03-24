@@ -3,6 +3,7 @@ import asyncio
 import html
 import aiohttp
 import discord
+from typing import Optional
 from discord.ext import commands
 
 emojis = {
@@ -22,7 +23,6 @@ WIN_COMBINATIONS = [
     (2, 4, 6),
 ]
 
-
 def build_ttt_embed(status: str, player_x, player_o):
     embed = discord.Embed(
         title="❌⭕ Tic Tac Toe",
@@ -33,7 +33,6 @@ def build_ttt_embed(status: str, player_x, player_o):
     embed.add_field(name="⭕ Player O", value=player_o.mention, inline=True)
     embed.set_footer(text="Press a square to make your move.")
     return embed
-
 
 class RPSButton(discord.ui.Button):
     def __init__(self, label, view_ref):
@@ -84,7 +83,6 @@ class RPSButton(discord.ui.Button):
         elif len(self.view_ref.choices) == 2:
             await self.view_ref.resolve(interaction)
 
-
 class RPSView(discord.ui.View):
     def __init__(self, bot, player1, opponent=None):
         super().__init__(timeout=60)
@@ -132,7 +130,6 @@ class RPSView(discord.ui.View):
         await interaction.message.edit(embed=embed, view=self)
         self.stop()
 
-
 class TicTacToeButton(discord.ui.Button):
     def __init__(self, position: int):
         super().__init__(
@@ -164,7 +161,6 @@ class TicTacToeButton(discord.ui.Button):
             )
 
         await view.make_move(interaction, self.position, interaction.user)
-
 
 class TicTacToeView(discord.ui.View):
     def __init__(self, player_x: discord.Member, player_o: discord.abc.User, bot_player: bool = False):
@@ -334,7 +330,6 @@ class TicTacToeView(discord.ui.View):
             except Exception:
                 pass
 
-
 class Connect4Button(discord.ui.Button):
     def __init__(self, column: int, row: int):
         super().__init__(
@@ -346,7 +341,6 @@ class Connect4Button(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         await self.view.play_turn(interaction, self.column)
-
 
 class Connect4View(discord.ui.View):
     ROWS = 6
@@ -507,12 +501,11 @@ class Connect4View(discord.ui.View):
             )
             await self.message.edit(embed=timeout_embed, view=self)
 
-
 class Fun(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @commands.command()
+    @commands.hybrid_command(name="kitty", description="Sends a random cat image.")
     async def kitty(self, ctx: commands.Context):
         """Sends a random cat image."""
         url = "https://api.thecatapi.com/v1/images/search"
@@ -538,7 +531,7 @@ class Fun(commands.Cog):
         embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
 
-    @commands.command()
+    @commands.hybrid_command(name="bunny", description="Sends a random bunny image.")
     async def bunny(self, ctx: commands.Context):
         """Sends a random bunny image."""
         url = "https://rabbit-api-two.vercel.app/api/random"
@@ -585,7 +578,7 @@ class Fun(commands.Cog):
         embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
 
-    @commands.command()
+    @commands.hybrid_command(name="coinflip", description="Flips a coin.")
     async def coinflip(self, ctx: commands.Context):
         """Flips a coin."""
         result = random.choice(["Heads", "Tails"])
@@ -598,7 +591,7 @@ class Fun(commands.Cog):
         embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
 
-    @commands.command()
+    @commands.hybrid_command(name="roll", description="Rolls a die.")
     async def roll(self, ctx: commands.Context, sides: int = 6):
         """Rolls a die. Example: ;roll 20"""
         if sides < 2:
@@ -619,7 +612,7 @@ class Fun(commands.Cog):
         embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
 
-    @commands.command(aliases=["8ball"])
+    @commands.hybrid_command(name="eightball", description="Ask the magic 8-ball a question.")
     async def eightball(self, ctx: commands.Context, *, question: str = None):
         """Ask the magic 8-ball a question."""
         if not question:
@@ -652,7 +645,7 @@ class Fun(commands.Cog):
         embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
 
-    @commands.command()
+    @commands.hybrid_command(name="choose", description="Choose between multiple choices.")
     async def choose(self, ctx: commands.Context, *, choices: str = None):
         """Choose between options separated by commas."""
         if not choices:
@@ -707,7 +700,7 @@ class Fun(commands.Cog):
         embed.set_author(name=str(ctx.author), icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
 
-    @commands.command()
+    @commands.hybrid_command(name="hug", description="Hug someone with a random anime GIF.")
     async def hug(self, ctx: commands.Context, member: discord.Member = None):
         """Hug someone with a random anime GIF."""
         if member is None:
@@ -757,7 +750,7 @@ class Fun(commands.Cog):
         )
         await ctx.send(embed=embed)
 
-    @commands.command()
+    @commands.hybrid_command(name="slap", description="Slap someone with a random anime GIF.")
     async def slap(self, ctx: commands.Context, member: discord.Member = None):
         """Slap someone with a random anime GIF."""
         if member is None:
@@ -807,7 +800,7 @@ class Fun(commands.Cog):
         )
         await ctx.send(embed=embed)
 
-    @commands.command()
+    @commands.hybrid_command(name="trivia", description="Starts a trivia question.")
     async def trivia(self, ctx: commands.Context):
         url = "https://opentdb.com/api.php?amount=1&type=multiple"
 
@@ -856,7 +849,7 @@ class Fun(commands.Cog):
         else:
             await ctx.send(f"❌ Wrong! The correct answer was **{correct}**.")
 
-    @commands.command()
+    @commands.hybrid_command(name="flag", description="Starts a country flag guessing game.")
     async def flag(self, ctx: commands.Context):
         try:
             url = "https://restcountries.com/v3.1/all?fields=name,flags"
@@ -933,7 +926,7 @@ class Fun(commands.Cog):
         except Exception as e:
             await ctx.send(f"Error: {e}")
 
-    @commands.command()
+    @commands.hybrid_command(name="rps", description="Starts a rock paper scissors game.")
     async def rps(self, ctx: commands.Context, opponent: discord.Member = None):
         if opponent == ctx.author:
             return await ctx.send("You can't play against yourself!")
@@ -947,7 +940,7 @@ class Fun(commands.Cog):
         )
         await ctx.send(embed=embed, view=view)
 
-    @commands.command()
+    @commands.hybrid_command(name="ttt", description="Play Tic Tac Toe.")
     async def ttt(self, ctx: commands.Context, opponent: discord.Member = None):
         if opponent is None:
             view = TicTacToeView(ctx.author, ctx.me, bot_player=True)
@@ -979,7 +972,7 @@ class Fun(commands.Cog):
         )
         view.message = message
 
-    @commands.command(aliases=["c4"])
+    @commands.hybrid_command(name="connect4", description="Play Connect4.")
     async def connect4(self, ctx: commands.Context, opponent: discord.User = None):
         if opponent is None:
             opponent = self.bot.user
@@ -996,17 +989,6 @@ class Fun(commands.Cog):
 
         if view.is_bot_game and view.current == 2:
             await view.bot_turn()
-
-    @commands.command()
-    async def support(self, ctx: commands.Context):
-        embed = discord.Embed(
-            title="Support",
-            description="🏳️‍⚧️",
-            colour=discord.Color.from_rgb(255, 64, 160)
-        )
-        embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
-        await ctx.send(embed=embed)
-
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Fun(bot))
