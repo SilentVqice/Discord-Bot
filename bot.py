@@ -16,17 +16,25 @@ intents.members = True
 intents.reactions = True
 intents.presences = True
 
-bot = commands.Bot(command_prefix=";", intents=intents, help_command=None)
+test_guild_id = 1483248089757388861
 
-async def load_extensions():
-    await bot.load_extension("cogs.Music.music")
-    await bot.load_extension("cogs.Utility.utility")
-    await bot.load_extension("cogs.Moderation.moderation")
-    await bot.load_extension("cogs.Fun.fun")
+class MyBot(commands.Bot):
+    async def setup_hook(self):
+        await bot.load_extension("cogs.Music.music")
+        await bot.load_extension("cogs.Utility.utility")
+        await bot.load_extension("cogs.Moderation.moderation")
+        await bot.load_extension("cogs.Fun.fun")
+
+        guild = discord.Object(id=test_guild_id)
+        self.tree.copy_global_to(guild=guild)
+        await self.tree.sync(guild=guild)
+
+        print("Commands synced.")
+
+bot = MyBot(command_prefix=";", intents=intents, help_command=None)
 
 async def main():
     async with bot:
-        await load_extensions()
         await bot.start(token)
 
 asyncio.run(main())

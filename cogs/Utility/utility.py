@@ -2,8 +2,8 @@ import io
 import json
 import os
 from pathlib import Path
-
 import discord
+from typing import Optional
 from PIL import Image, ImageFont, ImageOps
 from discord import AllowedMentions
 from discord.ext import commands
@@ -11,32 +11,32 @@ from discord.ext import commands
 help_data = {
     "Moderation": {
         "ban": {
-            "usage": ";ban @user [reason]",
+            "usage": ";ban @user [reason] or /ban @user [reason]",
             "description": "Bans a member from the server.",
             "example": [";ban @user Breaking rules"]
         },
         "unban": {
-            "usage": ";unban <user_id> [reason]",
+            "usage": ";unban <user_id> [reason] or /unban <user_id> [reason]",
             "description": "Unbans a member by their Discord user ID.",
             "example": [";unban 123456789012345678 Appeal accepted"]
         },
         "kick": {
-            "usage": ";kick @user [reason]",
+            "usage": ";kick @user [reason] or /kick @user [reason]",
             "description": "Kicks a member from the server.",
             "example": [";kick @user Spamming"]
         },
         "mute": {
-            "usage": ";mute @user [duration] [reason]",
+            "usage": ";mute @user [duration] [reason] or /mute @user [duration]",
             "description": "Mutes a member, optionally for a set time.",
             "example": [";mute @user 10m Spam"]
         },
         "unmute": {
-            "usage": ";unmute @user [reason]",
+            "usage": ";unmute @user [reason] or /unmute @user [reason]",
             "description": "Unmutes a member by removing the muted role.",
             "example": [";unmute @user"]
         },
         "purge": {
-            "usage": ";purge <amount>",
+            "usage": ";purge <amount> or /purge <amount>",
             "description": "Deletes a number of messages from the channel.",
             "example": [";purge 10"]
         }
@@ -44,173 +44,168 @@ help_data = {
 
     "Utility": {
         "help": {
-            "usage": ";help [command]",
+            "usage": ";help [command] or /help [command]",
             "description": "Shows all commands or detailed help for one command.",
             "example": [";help", ";help play"]
         },
         "info": {
-            "usage": ";info [@user]",
+            "usage": ";info [@user] or /info [@user]",
             "description": "Shows information about you or another user.",
             "example": [";info", ";info @Velourie"]
         }
     },
     "Fun": {
         "kitty": {
-            "usage": ";kitty",
+            "usage": ";kitty or /kitty",
             "description": "Sends a random cat image.",
             "example": [";kitty"]
         },
         "bunny": {
-            "usage": ";bunny",
+            "usage": ";bunny or /bunny",
             "description": "Sends a random bunny image.",
             "example": [";bunny"]
         },
         "coinflip": {
-            "usage": ";coinflip",
+            "usage": ";coinflip or /coinflip",
             "description": "Flips a coin.",
             "example": [";coinflip"]
         },
         "roll": {
-            "usage": ";roll [sides]",
+            "usage": ";roll [sides] or /roll [sides]",
             "description": "Rolls a die with the number of sides you choose.",
             "example": [";roll", ";roll 20"]
         },
         "eightball": {
-            "usage": ";eightball <question>",
+            "usage": ";eightball <question> or /eightball <question>",
             "description": "Ask the magic 8-ball a question.",
             "example": [";eightball Will I win?"],
             "aliases": ["8ball"]
         },
         "choose": {
-            "usage": ";choose <option1, option2, option3>",
+            "usage": ";choose <option1, option2, option3> or /choose <option1, option2, option3>",
             "description": "Chooses one option from a list.",
             "example": [";choose red, blue, green"]
         },
         "say": {
-            "usage": ";say <text>",
+            "usage": ";say <text> or /say <text>",
             "description": "Makes the bot repeat a message in an embed.",
             "example": [";say hello"]
         },
         "hug": {
-            "usage": ";hug @user",
+            "usage": ";hug @user or /hug @user",
             "description": "Sends a random anime hug GIF.",
             "example": [";hug @user"]
         },
         "slap": {
-            "usage": ";slap @user",
+            "usage": ";slap @user or /slap @user",
             "description": "Sends a random anime slap GIF.",
             "example": [";slap @user"]
         },
         "trivia": {
-            "usage": ";trivia",
+            "usage": ";trivia or /trivia",
             "description": "Starts a trivia question.",
             "example": [";trivia"]
         },
         "flag": {
-            "usage": ";flag",
+            "usage": ";flag or /flag",
             "description": "Starts a country flag guessing game.",
             "example": [";flag"]
         },
         "rps": {
-            "usage": ";rps [@user]",
+            "usage": ";rps [@user] or /rps [@user]",
             "description": "Play Rock, Paper, Scissors against a user or the bot.",
             "example": [";rps", ";rps @user"]
         },
         "ttt": {
-            "usage": ";ttt [@user]",
+            "usage": ";ttt [@user] or /ttt [@user]",
             "description": "Play Tic Tac Toe against a user or the bot.",
             "example": [";ttt", ";ttt @user"]
         },
         "connect4": {
-            "usage": ";connect4 [@user]",
+            "usage": ";connect4 [@user] or /connect4 [@user]",
             "description": "Play Connect 4 against a user or the bot.",
             "example": [";connect4", ";connect4 @user", ";c4 @user"],
             "aliases": ["c4"]
         },
-        "support": {
-            "usage": ";support",
-            "description": "Sends a support flag.",
-            "example": [";support"]
-        }
     },
     "Music": {
         "join": {
-            "usage": ";join",
+            "usage": ";join or /join",
             "description": "Joins your current voice channel.",
             "example": [";join"]
         },
         "play": {
-            "usage": ";play <song name or URL>",
+            "usage": ";play <song name or URL> or /play <song name or URL>",
             "description": "Adds a song to the queue or starts playback.",
             "example": [";play Despacito", ";play https://youtube.com/watch?v=..."]
         },
         "pause": {
-            "usage": ";pause",
+            "usage": ";pause or /pause",
             "description": "Pauses the current song.",
             "example": [";pause"]
         },
         "resume": {
-            "usage": ";resume",
+            "usage": ";resume or /resume",
             "description": "Resumes the paused song.",
             "example": [";resume"]
         },
         "skip": {
-            "usage": ";skip",
+            "usage": ";skip or /skip",
             "description": "Skips the current song.",
             "example": [";skip"]
         },
         "queue": {
-            "usage": ";queue",
+            "usage": ";queue or /queue",
             "description": "Shows the current queue.",
             "example": [";queue"]
         },
         "remove": {
-            "usage": ";remove <number>",
+            "usage": ";remove <number> or /remove <number>",
             "description": "Removes a song from the queue.",
             "example": [";remove 2"]
         },
         "clear": {
-            "usage": ";clear",
+            "usage": ";clear or /clear",
             "description": "Clears the queue.",
             "example": [";clear"]
         },
         "leave": {
-            "usage": ";leave",
+            "usage": ";leave or /leave",
             "description": "Stops playback and disconnects from voice.",
             "example": [";leave"]
         },
         "loop": {
-            "usage": ";loop [on/off]",
+            "usage": ";loop [on/off] or /loop [on/off]",
             "description": "Toggles looping for the current song.",
             "example": [";loop", ";loop on", ";loop off"]
         },
         "shuffle": {
-            "usage": ";shuffle",
+            "usage": ";shuffle or /shuffle",
             "description": "Shuffles the current queue.",
             "example": [";shuffle"]
         },
         "volume": {
-            "usage": ";volume <0-200>",
+            "usage": ";volume <0-200> or volume <0-200>",
             "description": "Sets playback volume.",
             "example": [";volume 50", ";volume 100"]
         },
         "slowed": {
-            "usage": ";slowed [on/off]",
+            "usage": ";slowed [on/off] or /slowed [on/off]",
             "description": "Toggles slowed mode.",
             "example": [";slowed", ";slowed on", ";slowed off"]
         },
         "sped": {
-            "usage": ";sped [on/off]",
+            "usage": ";sped [on/off] or /sped [on/off]",
             "description": "Toggles sped mode.",
             "example": [";sped", ";sped on", ";sped off"]
         },
         "bassboost": {
-            "usage": ";bassboost [on/off]",
+            "usage": ";bassboost [on/off] or bassboost [on/off]",
             "description": "Toggles bassboost mode.",
             "example": [";bassboost", ";bassboost on", ";bassboost off"]
         },
         "lyrics": {
-            "usage": ";lyrics",
+            "usage": ";lyrics or /lyrics",
             "description": "Shows lyrics for the current track.",
             "example": [";lyrics"]
         }
@@ -251,8 +246,8 @@ class Utility(commands.Cog):
         self.card_width = 1000
         self.card_height = 350
 
-    @commands.command(name="help")
-    async def help_command(self, ctx: commands.Context, command_name: str = None):
+    @commands.hybrid_command(name="help", description="Shows all commands or detailed help for one command.")
+    async def help_command(self, ctx: commands.Context, command_name: Optional[str] = None):
         if command_name is None:
             embed = discord.Embed(
                 title="✨ Bot Help",
@@ -289,7 +284,7 @@ class Utility(commands.Cog):
 
             embed.add_field(
                 name="Made with love by",
-                value=f"<@465610916873109504> and <@812269541731074078>",
+                value=f"<@465610916873109504>",
                 inline=False
             )
             embed.set_footer(text=f"Total commands: {sum(len(x) for x in help_data.values())}")
@@ -500,8 +495,8 @@ class Utility(commands.Cog):
             await member.add_roles(role)
             print(f"Added {role.name} to {member.name}.")
 
-    @commands.command()
-    async def info(self, ctx: commands.Context, member: discord.Member = None):
+    @commands.hybrid_command(name="info", description="Shows information about you or another user.")
+    async def info(self, ctx: commands.Context, member: Optional[discord.Member] = None):
         member = member or ctx.author
 
         roles = [role.mention for role in reversed(member.roles) if role.name != "@everyone"]
@@ -538,7 +533,6 @@ class Utility(commands.Cog):
 
         special_user_responses = {
             979934316429738035: "Mwah",
-            812269541731074078: "<3",
             465610916873109504: "👑"
         }
 
