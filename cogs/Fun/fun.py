@@ -982,21 +982,6 @@ class Fun(commands.Cog):
         )
         view.message = message
 
-    @commands.hybrid_command(name="connect4", description="Play Connect4.")
-    async def connect4(self, ctx: commands.Context, opponent: discord.User = None):
-        if opponent is None:
-            opponent = self.bot.user
-
-        if opponent.bot and opponent != self.bot.user:
-            return await ctx.send("You can only challenge a real user or me.")
-
-        if opponent == ctx.author:
-            return await ctx.send("You can't challenge yourself.")
-
-        view = Connect4View(self.bot, ctx.author, opponent)
-        message = await ctx.send(embed=view.get_embed(), view=view)
-        view.message = message
-
         if view.is_bot_game and view.current == 2:
             await view.bot_turn()
 
