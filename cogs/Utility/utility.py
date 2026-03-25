@@ -246,6 +246,10 @@ class Utility(commands.Cog):
         self.card_width = 1000
         self.card_height = 350
 
+########################################################################################################################
+# HELP
+########################################################################################################################
+
     @commands.hybrid_command(name="help", description="Shows all commands or detailed help for one command.")
     async def help_command(self, ctx: commands.Context, command_name: Optional[str] = None):
         if command_name is None:
@@ -494,6 +498,10 @@ class Utility(commands.Cog):
         if role:
             await member.add_roles(role)
             print(f"Added {role.name} to {member.name}.")
+
+########################################################################################################################
+# INFO
+########################################################################################################################
 
     @commands.hybrid_command(name="info", description="Shows information about you or another user.")
     async def info(self, ctx: commands.Context, member: Optional[discord.Member] = None):

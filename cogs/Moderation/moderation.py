@@ -45,6 +45,10 @@ class Moderation(commands.Cog):
         with open(self.WARNS_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
 
+########################################################################################################################
+# PURGE
+########################################################################################################################
+
     @commands.hybrid_command(name="purge", description="Deletes a number of messages from the channel.")
     @commands.has_permissions(manage_messages=True)
     async def purge(self, ctx: commands.Context, amount: int):
@@ -54,6 +58,10 @@ class Moderation(commands.Cog):
         deleted = await ctx.channel.purge(limit=amount + (0 if ctx.interaction else 1))
         deleted_count = len(deleted) if ctx.interaction else max(len(deleted) - 1, 0)
         await ctx.send(f"Deleted {deleted_count} messages.", delete_after=5)
+
+########################################################################################################################
+# KICK
+########################################################################################################################
 
     @commands.hybrid_command(name="kick", description="Kicks a member from the server.")
     @commands.has_permissions(kick_members=True)
@@ -76,6 +84,10 @@ class Moderation(commands.Cog):
         except discord.Forbidden:
             await ctx.send("I do not have permission to kick this user.")
 
+########################################################################################################################
+# BAN
+########################################################################################################################
+
     @commands.hybrid_command(name="ban", description="Bans a member from the server.")
     @commands.has_permissions(ban_members=True)
     async def ban(self, ctx: commands.Context, member: discord.Member, *, reason: Optional[str] = None):
@@ -97,6 +109,10 @@ class Moderation(commands.Cog):
         except discord.Forbidden:
             await ctx.send("I do not have permission to ban this user.")
 
+########################################################################################################################
+# UNBAN
+########################################################################################################################
+
     @commands.hybrid_command(name="unban", description="Unbans a member by their Discord user ID.")
     @commands.has_permissions(ban_members=True)
     async def unban(self, ctx: commands.Context, user_id: int, *, reason: Optional[str] = None):
@@ -110,6 +126,10 @@ class Moderation(commands.Cog):
             await ctx.send("I do not have permission to unban this user.")
         except Exception as e:
             await ctx.send(f"An error occurred: {e}")
+
+########################################################################################################################
+# MUTE
+########################################################################################################################
 
     @commands.hybrid_command(name="mute", description="Mutes a member, optionally for a set time.")
     @commands.has_permissions(manage_roles=True)
@@ -164,6 +184,10 @@ class Moderation(commands.Cog):
                 await member.remove_roles(role, reason="Temporary mute expired")
                 await ctx.send(f"{member.mention} has been automatically unmuted after {duration}.")
 
+########################################################################################################################
+# UNMUTE
+########################################################################################################################
+
     @commands.hybrid_command(name="unmute", description="Unmutes a member.")
     @commands.has_permissions(manage_roles=True)
     async def unmute(self, ctx: commands.Context, member: discord.Member, *, reason: Optional[str] = None):
@@ -185,6 +209,10 @@ class Moderation(commands.Cog):
             await ctx.send(f"{member.mention} has been unmuted.")
         except discord.Forbidden:
             await ctx.send("I do not have permission to unmute this user.")
+
+########################################################################################################################
+# WARN
+########################################################################################################################
 
     @commands.hybrid_command(name="warn", description="Warns a member.")
     @commands.has_permissions(manage_messages=True)

@@ -1006,6 +1006,10 @@ class Music(commands.Cog):
 
         return embed
 
+########################################################################################################################
+# AUTOPLAY
+########################################################################################################################
+
     @commands.hybrid_command(name="autoplay", description="Toggles autoplay mode.")
     async def autoplay(self, ctx: commands.Context, mode: Optional[str] = None):
         state = self.get_state(ctx.guild.id)
@@ -1023,6 +1027,10 @@ class Music(commands.Cog):
 
         await ctx.send(embed=self.info_embed(f"Autoplay is now **{'ON' if state.autoplay_mode else 'OFF'}**.", title="Autoplay Updated"))
         await self.update_now_playing_embed(ctx.guild.id)
+
+########################################################################################################################
+# PLAY
+########################################################################################################################
 
     @commands.hybrid_command(name="play", description="Adds a song to the queue or starts playback.")
     async def play(self, ctx: commands.Context, *, query: str):
@@ -1218,6 +1226,10 @@ class Music(commands.Cog):
             self.now_playing_progress_loop(ctx.guild.id, state.current_song["url"])
         )
 
+########################################################################################################################
+# PAUSE
+########################################################################################################################
+
     @commands.hybrid_command(name="pause", description="Pauses the current song.")
     async def pause(self, ctx: commands.Context):
         state = self.get_state(ctx.guild.id)
@@ -1229,6 +1241,10 @@ class Music(commands.Cog):
             await self.update_now_playing_embed(ctx.guild.id)
         else:
             await ctx.send(embed=self.warning_embed("No song is playing!", title="Nothing Playing"))
+
+########################################################################################################################
+# RESUME
+########################################################################################################################
 
     @commands.hybrid_command(name="resume", description="Resumes the paused song.")
     async def resume(self, ctx: commands.Context):
@@ -1244,6 +1260,10 @@ class Music(commands.Cog):
         else:
             await ctx.send(embed=self.warning_embed("No song is paused!", title="Nothing Paused"))
 
+########################################################################################################################
+# SKIP
+########################################################################################################################
+
     @commands.hybrid_command(name="skip", description="Skips the current song.")
     async def skip(self, ctx: commands.Context):
         state = self.get_state(ctx.guild.id)
@@ -1254,6 +1274,10 @@ class Music(commands.Cog):
             await ctx.send(embed=self.info_embed("Skipped the song.", title="Skipped"))
         else:
             await ctx.send(embed=self.warning_embed("Nothing is playing!", title="Nothing Playing"))
+
+########################################################################################################################
+# QUEUE
+########################################################################################################################
 
     @commands.hybrid_command(name="queue", description="See the list of songs in the queue.")
     async def queue(self, ctx):
@@ -1288,6 +1312,10 @@ class Music(commands.Cog):
 
         await ctx.send(embed=embed)
 
+########################################################################################################################
+# SHUFFLE
+########################################################################################################################
+
     @commands.hybrid_command(name="shuffle", description="Shuffles the current queue.")
     async def shuffle(self, ctx: commands.Context):
         state = self.get_state(ctx.guild.id)
@@ -1305,6 +1333,10 @@ class Music(commands.Cog):
             embed=self.success_embed("The queue has been shuffled.", title="Queue Shuffled")
         )
         await self.update_now_playing_embed(ctx.guild.id)
+
+########################################################################################################################
+# JOIN
+########################################################################################################################
 
     @commands.hybrid_command(name="join", description="Joins your current voice channel.")
     async def join(self, ctx: commands.Context):
@@ -1328,6 +1360,10 @@ class Music(commands.Cog):
         await ctx.send(
             embed=self.success_embed(f"Joined **{ctx.author.voice.channel}**.", title="Voice Connected")
         )
+
+########################################################################################################################
+# LEAVE
+########################################################################################################################
 
     @commands.hybrid_command(name="leave", description="Stops playback and disconnects from voice.")
     async def leave(self, ctx: commands.Context):
@@ -1357,6 +1393,10 @@ class Music(commands.Cog):
         await ctx.voice_client.disconnect()
         await ctx.send(embed=self.info_embed("Disconnected from the voice channel.", title="Disconnected"))
 
+########################################################################################################################
+# LOOP
+########################################################################################################################
+
     @commands.hybrid_command(name="loop", description="Toggles looping for the current song.")
     async def loop(self, ctx: commands.Context, mode: Optional[str] = None):
         state = self.get_state(ctx.guild.id)
@@ -1374,6 +1414,10 @@ class Music(commands.Cog):
 
         await ctx.send(embed=self.info_embed(f"Loop is now **{'ON' if state.loop_song else 'OFF'}**.", title="Loop Updated"))
         await self.update_now_playing_embed(ctx.guild.id)
+
+########################################################################################################################
+# VOLUME
+########################################################################################################################
 
     @commands.hybrid_command(name="volume", description="Sets playback volume.")
     async def volume(self, ctx: commands.Context, volume: int):
@@ -1397,6 +1441,10 @@ class Music(commands.Cog):
             await self.update_now_playing_embed(ctx.guild.id)
         else:
             await ctx.send(embed=self.warning_embed("No song is playing!", title="Nothing Playing"))
+
+########################################################################################################################
+# SLOWED
+########################################################################################################################
 
     @commands.hybrid_command(name="slowed", description="Toggles slowed mode.")
     async def slowed(self, ctx: commands.Context, mode: Optional[str] = None):
@@ -1439,6 +1487,10 @@ class Music(commands.Cog):
         )
         await self.update_now_playing_embed(ctx.guild.id)
 
+########################################################################################################################
+# SPED
+########################################################################################################################
+
     @commands.hybrid_command(name="sped", description="Toggles sped mode.")
     async def sped(self, ctx: commands.Context, mode: Optional[str] = None):
         state = self.get_state(ctx.guild.id)
@@ -1480,6 +1532,10 @@ class Music(commands.Cog):
         )
         await self.update_now_playing_embed(ctx.guild.id)
 
+########################################################################################################################
+# BASSBOOST
+########################################################################################################################
+
     @commands.hybrid_command(name="bassboost", description="Toggles bassboost mode.")
     async def bassboost(self, ctx: commands.Context, mode: Optional[str] = None):
         state = self.get_state(ctx.guild.id)
@@ -1518,6 +1574,10 @@ class Music(commands.Cog):
         )
         await self.update_now_playing_embed(ctx.guild.id)
 
+########################################################################################################################
+# CLEAR
+########################################################################################################################
+
     @commands.hybrid_command(name="clear", description="Clears the queue.")
     async def clear(self, ctx: commands.Context):
         state = self.get_state(ctx.guild.id)
@@ -1529,6 +1589,10 @@ class Music(commands.Cog):
         state.song_queue.clear()
         await ctx.send(embed=self.info_embed(f"Cleared **{cleared}** song(s) from the queue.", title="Queue Cleared"))
         await self.update_now_playing_embed(ctx.guild.id)
+
+########################################################################################################################
+# REMOVE
+########################################################################################################################
 
     @commands.hybrid_command(name="remove", description="Removes a song from the queue.")
     async def remove(self, ctx: commands.Context, position: int):
@@ -1543,6 +1607,10 @@ class Music(commands.Cog):
         removed_song = state.song_queue.pop(position - 1)
         await ctx.send(embed=self.info_embed(f"Removed **{removed_song['title']}** from the queue.", title="Removed"))
         await self.update_now_playing_embed(ctx.guild.id)
+
+########################################################################################################################
+# LYRICS
+########################################################################################################################
 
     @commands.hybrid_command(name="lyrics", description="Shows lyrics for the current track.")
     async def lyrics(self, ctx: commands.Context):

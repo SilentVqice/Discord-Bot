@@ -1,18 +1,19 @@
-import random
 import asyncio
 import html
+import random
+from typing import Optional
+
 import aiohttp
 import discord
-from typing import Optional
 from discord.ext import commands
 
-emojis = {
+RPS_EMOJIS = {
     "rock": "🪨",
     "paper": "📄",
-    "scissors": "✂️"
+    "scissors": "✂️",
 }
 
-WIN_COMBINATIONS = [
+TTT_WIN_COMBINATIONS = [
     (0, 1, 2),
     (3, 4, 5),
     (6, 7, 8),
@@ -23,7 +24,33 @@ WIN_COMBINATIONS = [
     (2, 4, 6),
 ]
 
-def build_ttt_embed(status: str, player_x, player_o):
+EIGHTBALL_RESPONSES = [
+    "Yes.",
+    "No.",
+    "Maybe.",
+    "Definitely.",
+    "Absolutely not.",
+    "It is certain.",
+    "Very doubtful.",
+    "Ask again later.",
+    "Without a doubt.",
+    "Signs point to yes.",
+]
+
+def make_embed(
+    title: str,
+    description: Optional[str] = None,
+    colour: discord.Colour = discord.Color.blurple(),
+) -> discord.Embed:
+    return discord.Embed(title=title, description=description, colour=colour)
+
+
+def add_requester_footer(embed: discord.Embed, user: discord.abc.User) -> discord.Embed:
+    embed.set_footer(text=f"Requested by {user}", icon_url=user.display_avatar.url)
+    return embed
+
+
+def build_ttt_embed(status: str, player_x: discord.abc.User, player_o: discord.abc.User) -> discord.Embed:
     embed = discord.Embed(
         title="❌⭕ Tic Tac Toe",
         description=status,
@@ -34,10 +61,14 @@ def build_ttt_embed(status: str, player_x, player_o):
     embed.set_footer(text="Press a square to make your move.")
     return embed
 
+########################################################################################################################
+# ROCK PAPER SCISSORS UI
+########################################################################################################################
+
 class RPSButton(discord.ui.Button):
-    def __init__(self, label, view_ref):
+    def __init__(self, label: str, view_ref: "RPSView"):
         super().__init__(
-            label=f"{emojis[label.lower()]} {label}",
+            label=f"{RPS_EMOJIS[label.lower()]} {label}",
             style=discord.ButtonStyle.primary
         )
         self.choice_lower = label.lower()
@@ -69,7 +100,7 @@ class RPSButton(discord.ui.Button):
         self.view_ref.choices[player] = (self.choice_lower, self.choice_label)
 
         await interaction.response.send_message(
-            f"You chose {emojis[self.choice_lower]} **{self.choice_label}**!",
+            f"You chose {RPS_EMOJIS[self.choice_lower]} **{self.choice_label}**!",
             ephemeral=True
         )
 
@@ -83,8 +114,9 @@ class RPSButton(discord.ui.Button):
         elif len(self.view_ref.choices) == 2:
             await self.view_ref.resolve(interaction)
 
+
 class RPSView(discord.ui.View):
-    def __init__(self, bot, player1, opponent=None):
+    def __init__(self, bot: commands.Bot, player1: discord.Member, opponent: Optional[discord.Member] = None):
         super().__init__(timeout=60)
         self.bot = bot
         self.player1 = player1
@@ -100,8 +132,8 @@ class RPSView(discord.ui.View):
         c1_lower, c1_label = self.choices[p1]
         c2_lower, c2_label = self.choices[p2]
 
-        c1_emoji = emojis[c1_lower]
-        c2_emoji = emojis[c2_lower]
+        c1_emoji = RPS_EMOJIS[c1_lower]
+        c2_emoji = RPS_EMOJIS[c2_lower]
 
         if c1_lower == c2_lower:
             result = "🤝 It's a tie!"
@@ -130,6 +162,19 @@ class RPSView(discord.ui.View):
         await interaction.message.edit(embed=embed, view=self)
         self.stop()
 
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
+
+########################################################################################################################
+# TIC TAC TOE UI
+########################################################################################################################
+
 class TicTacToeButton(discord.ui.Button):
     def __init__(self, position: int):
         super().__init__(
@@ -140,7 +185,7 @@ class TicTacToeButton(discord.ui.Button):
         self.position = position
 
     async def callback(self, interaction: discord.Interaction):
-        view: TicTacToeView = self.view
+        view: "TicTacToeView" = self.view
 
         if interaction.user not in (view.player_x, view.player_o):
             return await interaction.response.send_message(
@@ -162,6 +207,7 @@ class TicTacToeButton(discord.ui.Button):
 
         await view.make_move(interaction, self.position, interaction.user)
 
+
 class TicTacToeView(discord.ui.View):
     def __init__(self, player_x: discord.Member, player_o: discord.abc.User, bot_player: bool = False):
         super().__init__(timeout=120)
@@ -170,34 +216,34 @@ class TicTacToeView(discord.ui.View):
         self.current_player = player_x
         self.board = [None] * 9
         self.bot_player = bot_player
-        self.message = None
+        self.message: Optional[discord.Message] = None
 
         for i in range(9):
             self.add_item(TicTacToeButton(i))
 
-    def get_button(self, position: int):
+    def get_button(self, position: int) -> Optional[TicTacToeButton]:
         for item in self.children:
             if isinstance(item, TicTacToeButton) and item.position == position:
                 return item
         return None
 
-    def check_winner(self):
-        for a, b, c in WIN_COMBINATIONS:
+    def check_winner(self) -> Optional[str]:
+        for a, b, c in TTT_WIN_COMBINATIONS:
             if self.board[a] and self.board[a] == self.board[b] == self.board[c]:
                 return self.board[a]
         return None
 
-    def is_draw(self):
+    def is_draw(self) -> bool:
         return all(cell is not None for cell in self.board)
 
     def disable_all_buttons(self):
         for item in self.children:
             item.disabled = True
 
-    def available_moves(self):
+    def available_moves(self) -> list[int]:
         return [i for i, cell in enumerate(self.board) if cell is None]
 
-    def choose_bot_move(self):
+    def choose_bot_move(self) -> int:
         for move in self.available_moves():
             self.board[move] = "O"
             if self.check_winner() == "O":
@@ -229,11 +275,7 @@ class TicTacToeView(discord.ui.View):
         if button is not None:
             button.label = symbol
             button.disabled = True
-            button.style = (
-                discord.ButtonStyle.danger
-                if symbol == "X"
-                else discord.ButtonStyle.success
-            )
+            button.style = discord.ButtonStyle.danger if symbol == "X" else discord.ButtonStyle.success
 
         winner = self.check_winner()
         if winner:
@@ -256,9 +298,7 @@ class TicTacToeView(discord.ui.View):
             self.stop()
             return
 
-        self.current_player = (
-            self.player_o if self.current_player == self.player_x else self.player_x
-        )
+        self.current_player = self.player_o if self.current_player == self.player_x else self.player_x
         current_symbol = "X" if self.current_player == self.player_x else "O"
 
         await interaction.response.edit_message(
@@ -330,6 +370,10 @@ class TicTacToeView(discord.ui.View):
             except Exception:
                 pass
 
+########################################################################################################################
+# CONNECT 4 UI
+########################################################################################################################
+
 class Connect4Button(discord.ui.Button):
     def __init__(self, column: int, row: int):
         super().__init__(
@@ -342,11 +386,12 @@ class Connect4Button(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         await self.view.play_turn(interaction, self.column)
 
+
 class Connect4View(discord.ui.View):
     ROWS = 6
     COLS = 7
 
-    def __init__(self, bot, author: discord.Member, opponent: discord.Member):
+    def __init__(self, bot: commands.Bot, author: discord.Member, opponent: discord.Member):
         super().__init__(timeout=180)
         self.bot = bot
         self.author = author
@@ -355,22 +400,20 @@ class Connect4View(discord.ui.View):
         self.is_bot_game = opponent.id == bot.user.id
         self.current = 1
         self.board = [[0 for _ in range(self.COLS)] for _ in range(self.ROWS)]
-        self.message = None
+        self.message: Optional[discord.Message] = None
         self.lock = asyncio.Lock()
 
         for col in range(self.COLS):
             button_row = 0 if col < 5 else 1
             self.add_item(Connect4Button(col, button_row))
 
-    def render_board(self):
+    def render_board(self) -> str:
         pieces = {0: "⚫", 1: "🔴", 2: "🟡"}
-        lines = []
-        for row in self.board:
-            lines.append("".join(pieces[cell] for cell in row))
+        lines = ["".join(pieces[cell] for cell in row) for row in self.board]
         lines.append("1️⃣2️⃣3️⃣4️⃣5️⃣6️⃣7️⃣")
         return "\n".join(lines)
 
-    def get_embed(self, title="Connect 4", description=None):
+    def get_embed(self, title: str = "Connect 4", description: Optional[str] = None) -> discord.Embed:
         embed = discord.Embed(
             title=title,
             description=description if description else self.render_board(),
@@ -387,28 +430,24 @@ class Connect4View(discord.ui.View):
             )
         return embed
 
-    def available_columns(self):
+    def available_columns(self) -> list[int]:
         return [c for c in range(self.COLS) if self.board[0][c] == 0]
 
-    def drop_piece(self, col, player):
+    def drop_piece(self, col: int, player: int) -> Optional[int]:
         for row in range(self.ROWS - 1, -1, -1):
             if self.board[row][col] == 0:
                 self.board[row][col] = player
                 return row
         return None
 
-    def check_winner(self, row, col, player):
+    def check_winner(self, row: int, col: int, player: int) -> bool:
         directions = [(1, 0), (0, 1), (1, 1), (1, -1)]
         for dr, dc in directions:
             count = 1
             for direction in (1, -1):
                 r = row + dr * direction
                 c = col + dc * direction
-                while (
-                    0 <= r < self.ROWS
-                    and 0 <= c < self.COLS
-                    and self.board[r][c] == player
-                ):
+                while 0 <= r < self.ROWS and 0 <= c < self.COLS and self.board[r][c] == player:
                     count += 1
                     r += dr * direction
                     c += dc * direction
@@ -420,7 +459,7 @@ class Connect4View(discord.ui.View):
         for child in self.children:
             child.disabled = True
 
-    async def finish_game(self, winner=None):
+    async def finish_game(self, winner: Optional[discord.abc.User] = None):
         self.disable_all()
         if winner is None:
             title = "Connect 4 - Draw"
@@ -428,10 +467,8 @@ class Connect4View(discord.ui.View):
         else:
             title = "Connect 4 - Winner"
             desc = f"{self.render_board()}\n\n{winner.mention} wins!"
-        await self.message.edit(
-            embed=self.get_embed(title=title, description=desc),
-            view=self
-        )
+
+        await self.message.edit(embed=self.get_embed(title=title, description=desc), view=self)
         self.stop()
 
     async def bot_turn(self):
@@ -495,15 +532,22 @@ class Connect4View(discord.ui.View):
     async def on_timeout(self):
         self.disable_all()
         if self.message:
-            timeout_embed = self.get_embed(
-                title="Connect 4 - Timed Out",
-                description=f"{self.render_board()}\n\nGame ended due to inactivity."
-            )
-            await self.message.edit(embed=timeout_embed, view=self)
+            try:
+                timeout_embed = self.get_embed(
+                    title="Connect 4 - Timed Out",
+                    description=f"{self.render_board()}\n\nGame ended due to inactivity."
+                )
+                await self.message.edit(embed=timeout_embed, view=self)
+            except Exception:
+                pass
 
 class Fun(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+########################################################################################################################
+# KITTY
+########################################################################################################################
 
     @commands.hybrid_command(name="kitty", description="Sends a random cat image.")
     async def kitty(self, ctx: commands.Context):
@@ -515,23 +559,24 @@ class Fun(commands.Cog):
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as resp:
                 if resp.status != 200:
-                    embed = discord.Embed(
-                        title="Kitty",
-                        description="Could not fetch a cat image right now.. Sorry! 😿",
-                        colour=discord.Color.red()
+                    embed = make_embed(
+                        "Kitty",
+                        "Could not fetch a cat image right now.. Sorry! 😿",
+                        discord.Color.red()
                     )
                     return await ctx.send(embed=embed)
 
                 data = await resp.json()
                 image_url = data[0]["url"]
 
-        embed = discord.Embed(
-            title="Kitty!",
-            colour=discord.Color.pink()
-        )
+        embed = make_embed("Kitty!", colour=discord.Color.pink())
         embed.set_image(url=image_url)
-        embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
+        add_requester_footer(embed, ctx.author)
         await ctx.send(embed=embed)
+
+########################################################################################################################
+# BUNNY
+########################################################################################################################
 
     @commands.hybrid_command(name="bunny", description="Sends a random bunny image.")
     async def bunny(self, ctx: commands.Context):
@@ -543,10 +588,10 @@ class Fun(commands.Cog):
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as resp:
                 if resp.status != 200:
-                    embed = discord.Embed(
-                        title="Bunny",
-                        description="Could not fetch a bunny right now 🐰",
-                        colour=discord.Color.red()
+                    embed = make_embed(
+                        "Bunny",
+                        "Could not fetch a bunny right now 🐰",
+                        discord.Color.red()
                     )
                     return await ctx.send(embed=embed)
 
@@ -567,159 +612,122 @@ class Fun(commands.Cog):
                 break
 
         if not image_url:
-            embed = discord.Embed(
-                title="Bunny",
-                description="No valid bunny image found in API response 😢",
-                colour=discord.Color.red()
+            embed = make_embed(
+                "Bunny",
+                "No valid bunny image found in API response 😢",
+                discord.Color.red()
             )
             return await ctx.send(embed=embed)
 
-        embed = discord.Embed(
-            title="Bunny!",
-            colour=discord.Color.pink()
-        )
+        embed = make_embed("Bunny!", colour=discord.Color.pink())
         embed.set_image(url=image_url)
-        embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
+        add_requester_footer(embed, ctx.author)
         await ctx.send(embed=embed)
+
+########################################################################################################################
+# COINFLIP
+########################################################################################################################
 
     @commands.hybrid_command(name="coinflip", description="Flips a coin.")
     async def coinflip(self, ctx: commands.Context):
-        """Flips a coin."""
         result = random.choice(["Heads", "Tails"])
-
-        embed = discord.Embed(
-            title="Coinflip",
-            description=f"🪙 **{result}**",
-            colour=discord.Color.gold()
-        )
-        embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
+        embed = make_embed("Coinflip", f"🪙 **{result}**", discord.Color.gold())
+        add_requester_footer(embed, ctx.author)
         await ctx.send(embed=embed)
+
+########################################################################################################################
+# ROLL
+########################################################################################################################
 
     @commands.hybrid_command(name="roll", description="Rolls a die.")
     async def roll(self, ctx: commands.Context, sides: int = 6):
-        """Rolls a die. Example: ;roll 20"""
         if sides < 2:
-            embed = discord.Embed(
-                title="Roll",
-                description="The die needs at least 2 sides.",
-                colour=discord.Color.red()
-            )
+            embed = make_embed("Roll", "The die needs at least 2 sides.", discord.Color.red())
             return await ctx.send(embed=embed)
 
         result = random.randint(1, sides)
-
-        embed = discord.Embed(
-            title="Dice Roll",
-            description=f"🎲 You rolled **{result}** out of **{sides}**.",
-            colour=discord.Color.blurple()
+        embed = make_embed(
+            "Dice Roll",
+            f"🎲 You rolled **{result}** out of **{sides}**.",
+            discord.Color.blurple()
         )
-        embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
+        add_requester_footer(embed, ctx.author)
         await ctx.send(embed=embed)
+
+########################################################################################################################
+# EIGHTBALL
+########################################################################################################################
 
     @commands.hybrid_command(name="eightball", description="Ask the magic 8-ball a question.")
     async def eightball(self, ctx: commands.Context, *, question: str = None):
-        """Ask the magic 8-ball a question."""
         if not question:
-            embed = discord.Embed(
-                title="Magic 8-Ball",
-                description="Ask a question.",
-                colour=discord.Color.red()
-            )
+            embed = make_embed("Magic 8-Ball", "Ask a question.", discord.Color.red())
             return await ctx.send(embed=embed)
 
-        responses = [
-            "Yes.",
-            "No.",
-            "Maybe.",
-            "Definitely.",
-            "Absolutely not.",
-            "It is certain.",
-            "Very doubtful.",
-            "Ask again later.",
-            "Without a doubt.",
-            "Signs point to yes."
-        ]
-
-        embed = discord.Embed(
-            title="Magic 8-Ball",
-            colour=discord.Color.dark_purple()
-        )
+        embed = make_embed("Magic 8-Ball", colour=discord.Color.dark_purple())
         embed.add_field(name="Question", value=question, inline=False)
-        embed.add_field(name="Answer", value=f"🎱 {random.choice(responses)}", inline=False)
-        embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
+        embed.add_field(name="Answer", value=f"🎱 {random.choice(EIGHTBALL_RESPONSES)}", inline=False)
+        add_requester_footer(embed, ctx.author)
         await ctx.send(embed=embed)
+
+########################################################################################################################
+# CHOOSE
+########################################################################################################################
 
     @commands.hybrid_command(name="choose", description="Choose between multiple choices.")
     async def choose(self, ctx: commands.Context, *, choices: str = None):
-        """Choose between options separated by commas."""
         if not choices:
-            embed = discord.Embed(
-                title="Choose",
-                description="Give me some choices separated by commas.",
-                colour=discord.Color.red()
+            embed = make_embed(
+                "Choose",
+                "Give me some choices separated by commas.",
+                discord.Color.red()
             )
             return await ctx.send(embed=embed)
 
         options = [choice.strip() for choice in choices.split(",") if choice.strip()]
         if len(options) < 2:
-            embed = discord.Embed(
-                title="Choose",
-                description="Give me at least 2 choices.",
-                colour=discord.Color.red()
-            )
+            embed = make_embed("Choose", "Give me at least 2 choices.", discord.Color.red())
             return await ctx.send(embed=embed)
 
         chosen = random.choice(options)
-
-        embed = discord.Embed(
-            title="Choice Made",
-            description=f"🤔 I choose: **{chosen}**",
-            colour=discord.Color.green()
-        )
-        embed.set_footer(text=f"Requested by {ctx.author}", icon_url=ctx.author.display_avatar.url)
+        embed = make_embed("Choice Made", f"🤔 I choose: **{chosen}**", discord.Color.green())
+        add_requester_footer(embed, ctx.author)
         await ctx.send(embed=embed)
+
+########################################################################################################################
+# SAY
+########################################################################################################################
 
     @commands.command()
     async def say(self, ctx: commands.Context, *, text: str = None):
-        """Makes the bot repeat a message."""
         if not text:
-            embed = discord.Embed(
-                title="Say",
-                description="Give me something to say.",
-                colour=discord.Color.red()
-            )
+            embed = make_embed("Say", "Give me something to say.", discord.Color.red())
             return await ctx.send(embed=embed)
 
         try:
             await ctx.message.delete()
-        except discord.Forbidden:
-            pass
-        except discord.HTTPException:
+        except (discord.Forbidden, discord.HTTPException):
             pass
 
-        embed = discord.Embed(
-            description=text,
-            colour=discord.Color.blurple()
-        )
+        embed = discord.Embed(description=text, colour=discord.Color.blurple())
         embed.set_author(name=str(ctx.author), icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
 
+########################################################################################################################
+# HUG
+########################################################################################################################
+
     @commands.hybrid_command(name="hug", description="Hug someone with a random anime GIF.")
     async def hug(self, ctx: commands.Context, member: discord.Member = None):
-        """Hug someone with a random anime GIF."""
         if member is None:
-            embed = discord.Embed(
-                title="Hug",
-                description="You need to mention someone to hug.",
-                colour=discord.Color.red()
-            )
+            embed = make_embed("Hug", "You need to mention someone to hug.", discord.Color.red())
             return await ctx.send(embed=embed)
 
         if member == ctx.author:
-            embed = discord.Embed(
-                title="Hug",
-                description=f"🤗 {ctx.author.mention} hugs themselves. That is a bit sad.",
-                colour=discord.Color.pink()
+            embed = make_embed(
+                "Hug",
+                f"🤗 {ctx.author.mention} hugs themselves. That is a bit sad.",
+                discord.Color.pink()
             )
             return await ctx.send(embed=embed)
 
@@ -729,10 +737,10 @@ class Fun(commands.Cog):
         async with aiohttp.ClientSession(headers=headers) as session:
             async with session.get(url) as resp:
                 if resp.status != 200:
-                    embed = discord.Embed(
-                        title="Hug",
-                        description="Could not fetch a hug GIF right now.",
-                        colour=discord.Color.red()
+                    embed = make_embed(
+                        "Hug",
+                        "Could not fetch a hug GIF right now.",
+                        discord.Color.red()
                     )
                     return await ctx.send(embed=embed)
 
@@ -742,10 +750,10 @@ class Fun(commands.Cog):
         gif_url = result.get("url")
         anime_name = result.get("anime_name", "Unknown")
 
-        embed = discord.Embed(
-            title="Hug",
-            description=f"🤗 {ctx.author.mention} hugs {member.mention}!",
-            colour=discord.Color.pink()
+        embed = make_embed(
+            "Hug",
+            f"🤗 {ctx.author.mention} hugs {member.mention}!",
+            discord.Color.pink()
         )
         embed.set_image(url=gif_url)
         embed.set_footer(
@@ -754,23 +762,18 @@ class Fun(commands.Cog):
         )
         await ctx.send(embed=embed)
 
+########################################################################################################################
+# SLAP
+########################################################################################################################
+
     @commands.hybrid_command(name="slap", description="Slap someone with a random anime GIF.")
     async def slap(self, ctx: commands.Context, member: discord.Member = None):
-        """Slap someone with a random anime GIF."""
         if member is None:
-            embed = discord.Embed(
-                title="Slap",
-                description="You need to mention someone to slap.",
-                colour=discord.Color.red()
-            )
+            embed = make_embed("Slap", "You need to mention someone to slap.", discord.Color.red())
             return await ctx.send(embed=embed)
 
         if member == ctx.author:
-            embed = discord.Embed(
-                title="Slap",
-                description="🖐️ You slapped yourself. Brilliant.",
-                colour=discord.Color.red()
-            )
+            embed = make_embed("Slap", "🖐️ You slapped yourself. Brilliant.", discord.Color.red())
             return await ctx.send(embed=embed)
 
         url = "https://nekos.best/api/v2/slap"
@@ -779,10 +782,10 @@ class Fun(commands.Cog):
         async with aiohttp.ClientSession(headers=headers) as session:
             async with session.get(url) as resp:
                 if resp.status != 200:
-                    embed = discord.Embed(
-                        title="Slap",
-                        description="Could not fetch a slap GIF right now.",
-                        colour=discord.Color.red()
+                    embed = make_embed(
+                        "Slap",
+                        "Could not fetch a slap GIF right now.",
+                        discord.Color.red()
                     )
                     return await ctx.send(embed=embed)
 
@@ -792,10 +795,10 @@ class Fun(commands.Cog):
         gif_url = result.get("url")
         anime_name = result.get("anime_name", "Unknown")
 
-        embed = discord.Embed(
-            title="Slap",
-            description=f"🖐️ {ctx.author.mention} slapped {member.mention}!",
-            colour=discord.Color.red()
+        embed = make_embed(
+            "Slap",
+            f"🖐️ {ctx.author.mention} slapped {member.mention}!",
+            discord.Color.red()
         )
         embed.set_image(url=gif_url)
         embed.set_footer(
@@ -803,6 +806,10 @@ class Fun(commands.Cog):
             icon_url=ctx.author.display_avatar.url
         )
         await ctx.send(embed=embed)
+
+########################################################################################################################
+# TRIVIA
+########################################################################################################################
 
     @commands.hybrid_command(name="trivia", description="Starts a trivia question.")
     async def trivia(self, ctx: commands.Context):
@@ -816,7 +823,6 @@ class Fun(commands.Cog):
                 data = await resp.json()
 
         question_data = data["results"][0]
-
         question = html.unescape(question_data["question"])
         correct = html.unescape(question_data["correct_answer"])
         incorrect = [html.unescape(i) for i in question_data["incorrect_answers"]]
@@ -827,23 +833,20 @@ class Fun(commands.Cog):
         letters = ["A", "B", "C", "D"]
         answer_map = dict(zip(letters, answers))
 
-        description = ""
-        for letter, answer in answer_map.items():
-            description += f"**{letter}**. {answer}\n"
+        description = "\n".join(f"**{letter}**. {answer}" for letter, answer in answer_map.items())
 
-        embed = discord.Embed(
-            title="🧠 Trivia Question",
-            description=f"**{question}**\n\n{description}",
-            colour=discord.Color.green()
+        embed = make_embed(
+            "🧠 Trivia Question",
+            f"**{question}**\n\n{description}",
+            discord.Color.green()
         )
-
         await ctx.send(embed=embed)
 
         def check(m: discord.Message):
             return (
-                    m.author == ctx.author
-                    and m.channel == ctx.channel
-                    and m.content.upper() in letters
+                m.author == ctx.author
+                and m.channel == ctx.channel
+                and m.content.upper() in letters
             )
 
         try:
@@ -855,6 +858,10 @@ class Fun(commands.Cog):
             await ctx.send("✅ Correct!")
         else:
             await ctx.send(f"❌ Wrong! The correct answer was **{correct}**.")
+
+########################################################################################################################
+# FLAG
+########################################################################################################################
 
     @commands.hybrid_command(name="flag", description="Starts a country flag guessing game.")
     async def flag(self, ctx: commands.Context):
@@ -873,7 +880,7 @@ class Fun(commands.Cog):
             valid = [
                 c for c in data
                 if "name" in c and "common" in c["name"]
-                   and "flags" in c and "png" in c["flags"]
+                and "flags" in c and "png" in c["flags"]
             ]
 
             if not valid:
@@ -883,10 +890,10 @@ class Fun(commands.Cog):
             correct = country["name"]["common"]
             flag_url = country["flags"]["png"]
 
-            embed = discord.Embed(
-                title="🌍 Guess the Country!",
-                description="What country does this flag belong to?",
-                colour=discord.Color.blue()
+            embed = make_embed(
+                "🌍 Guess the Country!",
+                "What country does this flag belong to?",
+                discord.Color.blue()
             )
             embed.set_image(url=flag_url)
             await ctx.send(embed=embed)
@@ -910,6 +917,7 @@ class Fun(commands.Cog):
             while True:
                 elapsed = asyncio.get_running_loop().time() - start_time
                 remaining = total_time - elapsed
+
                 if remaining <= 0:
                     if not hint_task.done():
                         hint_task.cancel()
@@ -936,6 +944,10 @@ class Fun(commands.Cog):
         except Exception as e:
             await ctx.send(f"Error: {e}")
 
+########################################################################################################################
+# ROCK PAPER SCISSORS
+########################################################################################################################
+
     @commands.hybrid_command(name="rps", description="Starts a rock paper scissors game.")
     async def rps(self, ctx: commands.Context, opponent: discord.Member = None):
         if opponent == ctx.author:
@@ -943,12 +955,17 @@ class Fun(commands.Cog):
 
         view = RPSView(self.bot, ctx.author, opponent)
 
-        embed = discord.Embed(
-            title="Rock, Paper, Scissors",
-            description=f"{ctx.author.mention} vs {'🤖 Bot' if view.pve else opponent.mention}\nChoose your move below!",
-            colour=discord.Color.blurple()
+        embed = make_embed(
+            "Rock, Paper, Scissors",
+            f"{ctx.author.mention} vs {'🤖 Bot' if view.pve else opponent.mention}\nChoose your move below!",
+            discord.Color.blurple()
         )
-        await ctx.send(embed=embed, view=view)
+        message = await ctx.send(embed=embed, view=view)
+        view.message = message
+
+########################################################################################################################
+# TIC TAC TOE
+########################################################################################################################
 
     @commands.hybrid_command(name="ttt", description="Play Tic Tac Toe.")
     async def ttt(self, ctx: commands.Context, opponent: discord.Member = None):
@@ -982,8 +999,25 @@ class Fun(commands.Cog):
         )
         view.message = message
 
-        if view.is_bot_game and view.current == 2:
-            await view.bot_turn()
+########################################################################################################################
+# CONNECT 4
+########################################################################################################################
+
+    @commands.hybrid_command(name="connect4", aliases=["c4"], description="Play Connect 4.")
+    async def connect4(self, ctx: commands.Context, opponent: discord.Member = None):
+        if opponent is None:
+            opponent = ctx.me
+
+        if opponent == ctx.author:
+            return await ctx.send("You cannot play against yourself.")
+
+        if opponent.bot and opponent != ctx.me:
+            return await ctx.send("You can only play against me, not another bot.")
+
+        view = Connect4View(self.bot, ctx.author, opponent)
+        message = await ctx.send(embed=view.get_embed(), view=view)
+        view.message = message
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Fun(bot))
