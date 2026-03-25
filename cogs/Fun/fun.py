@@ -507,7 +507,9 @@ class Fun(commands.Cog):
 
     @commands.hybrid_command(name="kitty", description="Sends a random cat image.")
     async def kitty(self, ctx: commands.Context):
-        """Sends a random cat image."""
+        if ctx.interaction:
+            await ctx.defer()
+
         url = "https://api.thecatapi.com/v1/images/search"
 
         async with aiohttp.ClientSession() as session:
@@ -533,7 +535,9 @@ class Fun(commands.Cog):
 
     @commands.hybrid_command(name="bunny", description="Sends a random bunny image.")
     async def bunny(self, ctx: commands.Context):
-        """Sends a random bunny image."""
+        if ctx.interaction:
+            await ctx.defer()
+
         url = "https://rabbit-api-two.vercel.app/api/random"
 
         async with aiohttp.ClientSession() as session:
@@ -802,6 +806,9 @@ class Fun(commands.Cog):
 
     @commands.hybrid_command(name="trivia", description="Starts a trivia question.")
     async def trivia(self, ctx: commands.Context):
+        if ctx.interaction:
+            await ctx.defer()
+
         url = "https://opentdb.com/api.php?amount=1&type=multiple"
 
         async with aiohttp.ClientSession() as session:
@@ -832,11 +839,11 @@ class Fun(commands.Cog):
 
         await ctx.send(embed=embed)
 
-        def check(m):
+        def check(m: discord.Message):
             return (
-                m.author == ctx.author
-                and m.channel == ctx.channel
-                and m.content.upper() in letters
+                    m.author == ctx.author
+                    and m.channel == ctx.channel
+                    and m.content.upper() in letters
             )
 
         try:
@@ -851,6 +858,9 @@ class Fun(commands.Cog):
 
     @commands.hybrid_command(name="flag", description="Starts a country flag guessing game.")
     async def flag(self, ctx: commands.Context):
+        if ctx.interaction:
+            await ctx.defer()
+
         try:
             url = "https://restcountries.com/v3.1/all?fields=name,flags"
 
@@ -863,7 +873,7 @@ class Fun(commands.Cog):
             valid = [
                 c for c in data
                 if "name" in c and "common" in c["name"]
-                and "flags" in c and "png" in c["flags"]
+                   and "flags" in c and "png" in c["flags"]
             ]
 
             if not valid:
@@ -881,7 +891,7 @@ class Fun(commands.Cog):
             embed.set_image(url=flag_url)
             await ctx.send(embed=embed)
 
-            def check(m):
+            def check(m: discord.Message):
                 return m.author == ctx.author and m.channel == ctx.channel
 
             total_time = 25
@@ -895,10 +905,10 @@ class Fun(commands.Cog):
                     await ctx.send(f"💡 Hint: Starts with **{correct[0]}**")
 
             hint_task = asyncio.create_task(scheduled_hint())
-            start_time = asyncio.get_event_loop().time()
+            start_time = asyncio.get_running_loop().time()
 
             while True:
-                elapsed = asyncio.get_event_loop().time() - start_time
+                elapsed = asyncio.get_running_loop().time() - start_time
                 remaining = total_time - elapsed
                 if remaining <= 0:
                     if not hint_task.done():

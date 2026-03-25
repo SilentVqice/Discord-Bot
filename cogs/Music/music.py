@@ -1,11 +1,12 @@
 import discord
 import time
-from discord.ext import commands
 import asyncio
 import yt_dlp as youtube_dl
 import yt_dlp.utils as ytdlp_utils
 import re
 import aiohttp
+from typing import Any, cast, Optional
+from discord.ext import commands
 
 from typing import Any, cast
 
@@ -886,8 +887,8 @@ class Music(commands.Cog):
 
         return embed
 
-    @commands.command()
-    async def autoplay(self, ctx, mode: str = None):
+    @commands.hybrid_command(name="autoplay", description="Toggles autoplay mode.")
+    async def autoplay(self, ctx: commands.Context, mode: Optional[str] = None):
         state = self.get_state(ctx.guild.id)
 
         if mode is None:
@@ -904,15 +905,25 @@ class Music(commands.Cog):
         await ctx.send(embed=self.info_embed(f"Autoplay is now **{'ON' if state.autoplay_mode else 'OFF'}**.", title="Autoplay Updated"))
         await self.update_now_playing_embed(ctx.guild.id)
 
-    @commands.command()
-    async def play(self, ctx, *, query):
+    @commands.hybrid_command(name="play", description="Adds a song to the queue or starts playback.")
+    async def play(self, ctx: commands.Context, *, query: str):
+        if ctx.interaction:
+            await ctx.defer()
+
         state = self.get_state(ctx.guild.id)
 
         if not ctx.author.voice:
-            return await ctx.send(embed=self.warning_embed("You must be in a voice channel!", title="Voice Required"))
+            return await ctx.send(
+                embed=self.warning_embed("You must be in a voice channel!", title="Voice Required")
+            )
 
         if ctx.voice_client and ctx.voice_client.channel != ctx.author.voice.channel:
-            return await ctx.send(embed=self.warning_embed(f"I'm already being used in **{ctx.voice_client.channel}**.", title="Bot Is Busy"))
+            return await ctx.send(
+                embed=self.warning_embed(
+                    f"I'm already being used in **{ctx.voice_client.channel}**.",
+                    title="Bot Is Busy"
+                )
+            )
 
         if not ctx.voice_client:
             await ctx.author.voice.channel.connect()
@@ -921,7 +932,12 @@ class Music(commands.Cog):
         try:
             song = await self.get_song_info(query)
         except Exception as e:
-            return await ctx.send(embed=self.error_embed(f"Couldn't load this track:\n```py\n{e}\n```", title="Track Load Failed"))
+            return await ctx.send(
+                embed=self.error_embed(
+                    f"Couldn't load this track:\n```py\n{e}\n```",
+                    title="Track Load Failed"
+                )
+            )
 
         queue_song = {
             "url": song["webpage_url"],
@@ -938,7 +954,12 @@ class Music(commands.Cog):
         state.song_queue.append(queue_song)
 
         if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
-            await ctx.send(embed=self.success_embed(f"Added to queue: **[{song['title']}]({song['webpage_url']})**", title="Queued"))
+            await ctx.send(
+                embed=self.success_embed(
+                    f"Added to queue: **[{song['title']}]({song['webpage_url']})**",
+                    title="Queued"
+                )
+            )
         else:
             await self.play_next(ctx)
 
@@ -1055,8 +1076,8 @@ class Music(commands.Cog):
             self.now_playing_progress_loop(ctx.guild.id, state.current_song["url"])
         )
 
-    @commands.command()
-    async def pause(self, ctx):
+    @commands.hybrid_command(name="pause", description="Pauses the current song.")
+    async def pause(self, ctx: commands.Context):
         state = self.get_state(ctx.guild.id)
 
         if ctx.voice_client and ctx.voice_client.is_playing():
@@ -1067,8 +1088,8 @@ class Music(commands.Cog):
         else:
             await ctx.send(embed=self.warning_embed("No song is playing!", title="Nothing Playing"))
 
-    @commands.command()
-    async def resume(self, ctx):
+    @commands.hybrid_command(name="resume", description="Resumes the paused song.")
+    async def resume(self, ctx: commands.Context):
         state = self.get_state(ctx.guild.id)
 
         if ctx.voice_client and ctx.voice_client.is_paused():
@@ -1081,8 +1102,8 @@ class Music(commands.Cog):
         else:
             await ctx.send(embed=self.warning_embed("No song is paused!", title="Nothing Paused"))
 
-    @commands.command()
-    async def skip(self, ctx):
+    @commands.hybrid_command(name="skip", description="Skips the current song.")
+    async def skip(self, ctx: commands.Context):
         state = self.get_state(ctx.guild.id)
 
         if ctx.voice_client and (ctx.voice_client.is_playing() or ctx.voice_client.is_paused()):
@@ -1125,8 +1146,49 @@ class Music(commands.Cog):
 
         await ctx.send(embed=embed)
 
-    @commands.command()
-    async def leave(self, ctx):
+    @commands.hybrid_command(name="shuffle", description="Shuffles the current queue.")
+    async def shuffle(self, ctx: commands.Context):
+        state = self.get_state(ctx.guild.id)
+
+        if len(state.song_queue) < 2:
+            return await ctx.send(
+                embed=self.warning_embed("You need at least 2 songs in the queue to shuffle it.",
+                                         title="Not Enough Songs")
+            )
+
+        import random
+        random.shuffle(state.song_queue)
+
+        await ctx.send(
+            embed=self.success_embed("The queue has been shuffled.", title="Queue Shuffled")
+        )
+        await self.update_now_playing_embed(ctx.guild.id)
+
+    @commands.hybrid_command(name="join", description="Joins your current voice channel.")
+    async def join(self, ctx: commands.Context):
+        if not ctx.author.voice or not ctx.author.voice.channel:
+            return await ctx.send(
+                embed=self.warning_embed("You must be in a voice channel!", title="Voice Required")
+            )
+
+        if ctx.voice_client:
+            if ctx.voice_client.channel == ctx.author.voice.channel:
+                return await ctx.send(
+                    embed=self.info_embed("I'm already in your voice channel.", title="Already Connected")
+                )
+
+            await ctx.voice_client.move_to(ctx.author.voice.channel)
+            return await ctx.send(
+                embed=self.success_embed(f"Moved to **{ctx.author.voice.channel}**.", title="Voice Connected")
+            )
+
+        await ctx.author.voice.channel.connect()
+        await ctx.send(
+            embed=self.success_embed(f"Joined **{ctx.author.voice.channel}**.", title="Voice Connected")
+        )
+
+    @commands.hybrid_command(name="leave", description="Stops playback and disconnects from voice.")
+    async def leave(self, ctx: commands.Context):
         state = self.get_state(ctx.guild.id)
 
         if not ctx.voice_client or not ctx.voice_client.is_connected():
@@ -1153,8 +1215,8 @@ class Music(commands.Cog):
         await ctx.voice_client.disconnect()
         await ctx.send(embed=self.info_embed("Disconnected from the voice channel.", title="Disconnected"))
 
-    @commands.command()
-    async def loop(self, ctx, mode: str = None):
+    @commands.hybrid_command(name="loop", description="Toggles looping for the current song.")
+    async def loop(self, ctx: commands.Context, mode: Optional[str] = None):
         state = self.get_state(ctx.guild.id)
 
         if mode is None:
@@ -1171,8 +1233,8 @@ class Music(commands.Cog):
         await ctx.send(embed=self.info_embed(f"Loop is now **{'ON' if state.loop_song else 'OFF'}**.", title="Loop Updated"))
         await self.update_now_playing_embed(ctx.guild.id)
 
-    @commands.command()
-    async def volume(self, ctx, volume: int):
+    @commands.hybrid_command(name="volume", description="Sets playback volume.")
+    async def volume(self, ctx: commands.Context, volume: int):
         state = self.get_state(ctx.guild.id)
 
         if volume < 0 or volume > 200:
@@ -1194,8 +1256,8 @@ class Music(commands.Cog):
         else:
             await ctx.send(embed=self.warning_embed("No song is playing!", title="Nothing Playing"))
 
-    @commands.command()
-    async def slowed(self, ctx, mode: str = None):
+    @commands.hybrid_command(name="slowed", description="Toggles slowed mode.")
+    async def slowed(self, ctx: commands.Context, mode: Optional[str] = None):
         state = self.get_state(ctx.guild.id)
 
         if mode is None:
@@ -1235,8 +1297,8 @@ class Music(commands.Cog):
         )
         await self.update_now_playing_embed(ctx.guild.id)
 
-    @commands.command()
-    async def sped(self, ctx, mode: str = None):
+    @commands.hybrid_command(name="sped", description="Toggles sped mode.")
+    async def sped(self, ctx: commands.Context, mode: Optional[str] = None):
         state = self.get_state(ctx.guild.id)
 
         if mode is None:
@@ -1276,8 +1338,8 @@ class Music(commands.Cog):
         )
         await self.update_now_playing_embed(ctx.guild.id)
 
-    @commands.command()
-    async def bassboost(self, ctx, mode: str = None):
+    @commands.hybrid_command(name="bassboost", description="Toggles bassboost mode.")
+    async def bassboost(self, ctx: commands.Context, mode: Optional[str] = None):
         state = self.get_state(ctx.guild.id)
 
         if mode is None:
@@ -1314,8 +1376,8 @@ class Music(commands.Cog):
         )
         await self.update_now_playing_embed(ctx.guild.id)
 
-    @commands.command()
-    async def clear(self, ctx):
+    @commands.hybrid_command(name="clear", description="Clears the queue.")
+    async def clear(self, ctx: commands.Context):
         state = self.get_state(ctx.guild.id)
 
         if not state.song_queue:
@@ -1326,8 +1388,8 @@ class Music(commands.Cog):
         await ctx.send(embed=self.info_embed(f"Cleared **{cleared}** song(s) from the queue.", title="Queue Cleared"))
         await self.update_now_playing_embed(ctx.guild.id)
 
-    @commands.command()
-    async def remove(self, ctx, position: int):
+    @commands.hybrid_command(name="remove", description="Removes a song from the queue.")
+    async def remove(self, ctx: commands.Context, position: int):
         state = self.get_state(ctx.guild.id)
 
         if not state.song_queue:
@@ -1340,12 +1402,18 @@ class Music(commands.Cog):
         await ctx.send(embed=self.info_embed(f"Removed **{removed_song['title']}** from the queue.", title="Removed"))
         await self.update_now_playing_embed(ctx.guild.id)
 
-    @commands.command()
-    async def lyrics(self, ctx):
+    @commands.hybrid_command(name="lyrics", description="Shows lyrics for the current track.")
+    async def lyrics(self, ctx: commands.Context):
+        if ctx.interaction:
+            await ctx.defer(ephemeral=True)
+
         state = self.get_state(ctx.guild.id)
 
         if state.current_song is None:
-            return await ctx.send(embed=self.warning_embed("Nothing is playing!", title="Lyrics Unavailable"))
+            return await ctx.send(
+                embed=self.warning_embed("Nothing is playing!", title="Lyrics Unavailable"),
+                ephemeral=True
+            )
 
         data = await self.fetch_lyrics_data(state.current_song)
         if data is None:
@@ -1353,11 +1421,11 @@ class Music(commands.Cog):
                 embed=self.warning_embed(
                     "Couldn't find lyrics for the current track.",
                     title="Lyrics Not Found"
-                )
+                ),
+                ephemeral=True
             )
 
-        await ctx.send(embed=self.build_lyrics_embed(data))
-
+        await ctx.send(embed=self.build_lyrics_embed(data), ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(Music(bot))
