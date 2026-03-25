@@ -24,6 +24,7 @@ class MyBot(commands.Bot):
         await bot.load_extension("cogs.Utility.utility")
         await bot.load_extension("cogs.Moderation.moderation")
         await bot.load_extension("cogs.Fun.fun")
+        await bot.load_extension("cogs.Fun.ai")
 
         guild = discord.Object(id=test_guild_id)
         self.tree.copy_global_to(guild=guild)
