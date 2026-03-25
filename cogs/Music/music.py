@@ -5,10 +5,12 @@ import yt_dlp as youtube_dl
 import yt_dlp.utils as ytdlp_utils
 import re
 import aiohttp
+import os
+import base64
 from typing import Any, cast, Optional
 from discord.ext import commands
-
-from typing import Any, cast
+from dotenv import load_dotenv
+load_dotenv()
 
 ytdlp_utils.bug_reports_message = lambda *args, **kwargs: ""
 
@@ -37,6 +39,12 @@ ffmpeg_options = {
 
 ytdl = youtube_dl.YoutubeDL(cast(Any, ytdl_format_options))
 
+spotify_track_url_re = re.compile(
+    r"(?:https?://)?open\.spotify\.com/track/([A-Za-z0-9]+)(?:\?.*)?$"
+)
+
+spotify_client_id = os.getenv("SPOTIFY_CLIENT_ID")
+spotify_client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
 
 class GuildMusicState:
     def __init__(self):
@@ -373,8 +381,6 @@ class MusicControls(discord.ui.View):
             ephemeral=True
         )
 
-        self.stop()
-
 class Music(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -453,6 +459,113 @@ class Music(commands.Cog):
             state.paused_at = time.monotonic()
 
         return True, None
+
+    def is_spotify_track_url(self, query: str) -> bool:
+        return bool(spotify_track_url_re.search(query.strip()))
+
+    def extract_spotify_track_id(self, url: str) -> str | None:
+        match = spotify_track_url_re.search(url.strip())
+        if not match:
+            return None
+        return match.group(1)
+
+    async def get_spotify_access_token(self) -> str:
+        if not spotify_client_id or not spotify_client_secret:
+            raise RuntimeError(
+                "Spotify credentials are missing. Add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to your .env file."
+            )
+
+        auth_string = f"{spotify_client_id}:{spotify_client_secret}"
+        encoded_auth = base64.b64encode(auth_string.encode("utf-8")).decode("utf-8")
+
+        headers = {
+            "Authorization": f"Basic {encoded_auth}",
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+
+        data = {
+            "grant_type": "client_credentials"
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://accounts.spotify.com/api/token",
+                headers=headers,
+                data=data
+            ) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    raise RuntimeError(f"Spotify auth failed: {resp.status} - {error_text}")
+
+                payload = await resp.json()
+                token = payload.get("access_token")
+                if not token:
+                    raise RuntimeError(f"Spotify did not return an access token.")
+
+                return token
+
+    async def get_spotify_track_info(self, spotify_url: str) -> dict[str, Any]:
+        track_id = self.extract_spotify_track_id(spotify_url)
+        if not track_id:
+            raise RuntimeError("Invalid Spotify track URL.")
+
+        access_token = await self.get_spotify_access_token()
+
+        headers = {
+            "Authorization": f"Bearer {access_token}"
+        }
+
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(f"https://api.spotify.com/v1/tracks/{track_id}") as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    raise RuntimeError(f"Spotify track lookup failed: {resp.status} - {error_text}")
+
+                data = await resp.json()
+
+        artists = data.get("artists", [])
+        artist_names = [artist.get("name") for artist in artists if artist.get("name")]
+        artist_text = ", ".join(artist_names) if artist_names else "Unknown"
+
+        album = data.get("album", {})
+        images = album.get("images", [])
+        thumbnail = images[0].get("url") if images else None
+
+        duration_ms = data.get("duration_ms") or 0
+        duration_seconds = int(duration_ms / 1000)
+
+        return {
+            "spotify_url": spotify_url,
+            "title": data.get("name", "Unknown"),
+            "artists": artist_names,
+            "artist_text": artist_text,
+            "duration": duration_seconds,
+            "thumbnail": thumbnail,
+            "search_query": f"{artist_text} - {data.get('name', 'Unknown')} audio",
+        }
+
+    async def resolve_spotify_to_youtube(self, spotify_url: str) -> dict[str, Any]:
+        spotify_track = await self.get_spotify_track_info(spotify_url)
+        youtube_song = await self.get_song_info(spotify_track["search_query"])
+
+        youtube_url = youtube_song.get("webpage_url") or youtube_song.get("url")
+        if not youtube_url:
+            raise RuntimeError("Couldn't resolve the Spotify track to a playable YouTube result.")
+
+        return {
+            "query": spotify_url,
+            "url": youtube_url,
+            "title": spotify_track["title"],
+            "webpage_url": youtube_url,
+            "audio_url": youtube_song.get("audio_url"),
+            "duration": spotify_track["duration"] or youtube_song.get("duration", 0),
+            "thumbnail": spotify_track.get("thumbnail") or youtube_song.get("thumbnail"),
+            "uploader": spotify_track["artist_text"],
+            "views": youtube_song.get("views"),
+            "likes": youtube_song.get("likes"),
+            "spotify_url": spotify_url,
+            "source_platform": "spotify",
+        }
 
     async def get_song_info(self, query):
         loop = asyncio.get_running_loop()
@@ -706,6 +819,7 @@ class Music(commands.Cog):
         views = song.get("views")
         likes = song.get("likes")
         requester = song.get("requester")
+        source_platform = song.get("source_platform", "youtube")
 
         position = self.get_current_playback_position(state)
         progress_bar = self.build_progress_bar(position, duration)
@@ -752,7 +866,12 @@ class Music(commands.Cog):
         if thumbnail:
             embed.set_image(url=thumbnail)
 
-        embed.set_footer(text="Use ;queue to view upcoming songs.")
+        footer_text = "Use ;queue to view upcoming songs."
+        if source_platform == "spotify":
+            footer_text += " • Resolved from Spotify"
+
+        embed.set_footer(text=footer_text)
+
         return embed
 
     async def update_now_playing_embed(self, guild_id: int):
@@ -930,7 +1049,10 @@ class Music(commands.Cog):
             await asyncio.sleep(0.5)
 
         try:
-            song = await self.get_song_info(query)
+            if self.is_spotify_track_url(query):
+                song = await self.resolve_spotify_to_youtube(query)
+            else:
+                song = await self.get_song_info(query)
         except Exception as e:
             return await ctx.send(
                 embed=self.error_embed(
@@ -940,7 +1062,7 @@ class Music(commands.Cog):
             )
 
         queue_song = {
-            "url": song["webpage_url"],
+            "url": song.get("url") or song.get("webpage_url"),
             "title": song.get("title", "Unknown"),
             "webpage_url": song.get("webpage_url"),
             "thumbnail": song.get("thumbnail"),
@@ -949,6 +1071,8 @@ class Music(commands.Cog):
             "views": song.get("views"),
             "likes": song.get("likes"),
             "requester": ctx.author,
+            "spotify_url": song.get("spotify_url"),
+            "source_platform": song.get("source_platform", "youtube"),
         }
 
         state.song_queue.append(queue_song)
@@ -994,7 +1118,7 @@ class Music(commands.Cog):
                     state.now_playing_message = None
 
                     await ctx.voice_client.disconnect()
-                    await ctx.send(
+                    await ctx.channel.send(
                         embed=self.info_embed(
                             "Queue finished. Disconnected from the voice channel.",
                             title="Disconnected"
@@ -1005,7 +1129,24 @@ class Music(commands.Cog):
             queued_song = state.song_queue.pop(0)
 
         try:
-            fresh_song = await self.get_song_info(queued_song["url"])
+            track_url = queued_song.get("url") or queued_song.get("webpage_url")
+
+            if not track_url:
+                await ctx.send(
+                    embed=self.error_embed("This queued track has no playable URL.", title="Playback Failed")
+                )
+                return
+
+            if self.is_spotify_track_url(track_url):
+                await ctx.send(
+                    embed=self.error_embed(
+                        "A Spotify link was sent to the playback loader instead of a resolved YouTube link.",
+                        title="Playback Failed"
+                    )
+                )
+                return
+
+            fresh_song = await self.get_song_info(track_url)
         except Exception as e:
             await ctx.send(embed=self.error_embed(f"Couldn't load this track:\n```py\n{e}\n```", title="Track Load Failed"))
             return
@@ -1025,6 +1166,7 @@ class Music(commands.Cog):
             "views": fresh_song.get("views", queued_song.get("views")),
             "likes": fresh_song.get("likes", queued_song.get("likes")),
             "requester": queued_song.get("requester"),
+            "source_platform": queued_song.get("source_platform", "youtube"),
         }
 
         source = self.make_audio_source(
@@ -1066,7 +1208,7 @@ class Music(commands.Cog):
                 pass
 
         view = MusicControls(self, ctx.guild.id)
-        state.now_playing_message = await ctx.send(
+        state.now_playing_message = await ctx.channel.send(
             embed=self.build_now_playing_embed(state),
             view=view
         )
@@ -1113,7 +1255,7 @@ class Music(commands.Cog):
         else:
             await ctx.send(embed=self.warning_embed("Nothing is playing!", title="Nothing Playing"))
 
-    @commands.command(name="queue")
+    @commands.hybrid_command(name="queue", description="See the list of songs in the queue.")
     async def queue(self, ctx):
         state = self.get_state(ctx.guild.id)
 
