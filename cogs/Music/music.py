@@ -20,9 +20,7 @@ ytdl_format_options: dict[str, Any] = {
     "quiet": True,
     "default_search": "auto",
     "js_runtimes": {
-        "node": {
-            "path": r"C:\Program Files\nodejs\node.exe"
-        }
+        "node": {}
     },
 }
 
@@ -62,6 +60,7 @@ class GuildMusicState:
         self.autoplay_mode = False
         self.current_volume = 1.0
         self.paused_total = 0.0
+        self.queue_loop = False
 
 class MusicControls(discord.ui.View):
     def __init__(self, cog, guild_id: int):
@@ -260,6 +259,7 @@ class MusicControls(discord.ui.View):
         state.play_started_at = None
         state.paused_at = None
         state.paused_total = 0.0
+        state.queue_loop = False
 
         for item in self.children:
             item.disabled = True
@@ -351,7 +351,11 @@ class MusicControls(discord.ui.View):
             colour=discord.Color.blurple()
         )
         embed.set_footer(
-            text=f"Total queued: {len(state.song_queue)} | Loop: {'On' if state.loop_song else 'Off'}"
+            text=(
+                f"Total queued: {len(state.song_queue)} | "
+                f"Loop: {'On' if state.loop_song else 'Off'} | "
+                f"Queue Loop: {'On' if state.queue_loop else 'Off'}"
+            )
         )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -1124,6 +1128,17 @@ class Music(commands.Cog):
                         state.now_playing_updater = None
 
                     state.now_playing_message = None
+                    state.skip_once = False
+                    state.loop_song = False
+                    state.queue_loop = False
+                    state.autoplay_mode = False
+                    state.slowed_mode = False
+                    state.sped_mode = False
+                    state.bassboost_mode = False
+                    state.current_volume = 1.0
+                    state.play_started_at = None
+                    state.paused_at = None
+                    state.paused_total = 0.0
 
                     await ctx.voice_client.disconnect()
                     await ctx.channel.send(
@@ -1135,6 +1150,9 @@ class Music(commands.Cog):
                     return
 
             queued_song = state.song_queue.pop(0)
+
+            if state.queue_loop:
+                state.song_queue.append(queued_song.copy())
 
         try:
             track_url = queued_song.get("url") or queued_song.get("webpage_url")
@@ -1279,8 +1297,12 @@ class Music(commands.Cog):
 # QUEUE
 ########################################################################################################################
 
-    @commands.hybrid_command(name="queue", description="See the list of songs in the queue.")
-    async def queue(self, ctx):
+    @commands.hybrid_group(
+        name="queue",
+        description="Shows the queue and queue settings.",
+        fallback="show"
+    )
+    async def queue(self, ctx: commands.Context):
         state = self.get_state(ctx.guild.id)
 
         if not state.current_song and not state.song_queue:
@@ -1292,7 +1314,8 @@ class Music(commands.Cog):
 
         if state.current_song:
             lines.append(
-                f"**Now Playing:**\n🎶 **[{state.current_song['title']}]({state.current_song['webpage_url']})**")
+                f"**Now Playing:**\n🎶 **[{state.current_song['title']}]({state.current_song['webpage_url']})**"
+            )
 
         if state.song_queue:
             queue_text = "\n".join(
@@ -1308,9 +1331,49 @@ class Music(commands.Cog):
             description="\n\n".join(lines),
             colour=discord.Color.blurple()
         )
-        embed.set_footer(text=f"Total queued: {len(state.song_queue)} | Loop: {'On' if state.loop_song else 'Off'}")
+        embed.add_field(
+            name="Settings",
+            value=(
+                f"**Song Loop:** {'ON' if state.loop_song else 'OFF'}\n"
+                f"**Queue Loop:** {'ON' if state.queue_loop else 'OFF'}"
+            ),
+            inline=False
+        )
+        embed.set_footer(text=f"Total queued: {len(state.song_queue)}")
 
         await ctx.send(embed=embed)
+
+########################################################################################################################
+# QUEUE LOOP
+########################################################################################################################
+
+    @queue.command(name="loop", description="Toggles queue looping.")
+    async def queue_loop(self, ctx: commands.Context, mode: Optional[str] = None):
+        state = self.get_state(ctx.guild.id)
+
+        if mode is None:
+            state.queue_loop = not state.queue_loop
+        else:
+            mode = mode.lower().strip()
+            if mode in ("on", "true", "yes", "1"):
+                state.queue_loop = True
+            elif mode in ("off", "false", "no", "0"):
+                state.queue_loop = False
+            else:
+                return await ctx.send(
+                    embed=self.warning_embed(
+                        "Use `;queue loop`, `;queue loop on`, or `;queue loop off`.",
+                        title="Invalid Usage"
+                    )
+                )
+
+        await ctx.send(
+            embed=self.info_embed(
+                f"Queue loop is now **{'ON' if state.queue_loop else 'OFF'}**.",
+                title="Queue Loop Updated"
+            )
+        )
+        await self.update_now_playing_embed(ctx.guild.id)
 
 ########################################################################################################################
 # SHUFFLE
@@ -1389,6 +1452,7 @@ class Music(commands.Cog):
         state.play_started_at = None
         state.paused_at = None
         state.paused_total = 0.0
+        state.queue_loop = False
 
         await ctx.voice_client.disconnect()
         await ctx.send(embed=self.info_embed("Disconnected from the voice channel.", title="Disconnected"))
@@ -1636,6 +1700,81 @@ class Music(commands.Cog):
             )
 
         await ctx.send(embed=self.build_lyrics_embed(data), ephemeral=True)
+
+########################################################################################################################
+# ADD
+########################################################################################################################
+
+    @commands.hybrid_command(name="add", description="Adds a song to the queue without replacing /play.")
+    async def add(self, ctx: commands.Context, *, query: str):
+        if ctx.interaction:
+            await ctx.defer()
+
+        state = self.get_state(ctx.guild.id)
+
+        if not ctx.author.voice:
+            return await ctx.send(
+                embed=self.warning_embed("You must be in a voice channel!", title="Voice Required")
+            )
+
+        if ctx.voice_client and ctx.voice_client.channel != ctx.author.voice.channel:
+            return await ctx.send(
+                embed=self.warning_embed(
+                    f"I'm already being used in **{ctx.voice_client.channel}**.",
+                    title="Bot Is Busy"
+                )
+            )
+
+        if not ctx.voice_client:
+            await ctx.author.voice.channel.connect()
+            await asyncio.sleep(0.5)
+
+        try:
+            if self.is_spotify_track_url(query):
+                song = await self.resolve_spotify_to_youtube(query)
+            else:
+                song = await self.get_song_info(query)
+        except Exception as e:
+            return await ctx.send(
+                embed=self.error_embed(
+                    f"Couldn't load this track:\n```py\n{e}\n```",
+                    title="Track Load Failed"
+                )
+            )
+
+        queue_song = {
+            "url": song.get("url") or song.get("webpage_url"),
+            "title": song.get("title", "Unknown"),
+            "webpage_url": song.get("webpage_url"),
+            "thumbnail": song.get("thumbnail"),
+            "duration": song.get("duration", 0),
+            "uploader": song.get("uploader", "Unknown"),
+            "views": song.get("views"),
+            "likes": song.get("likes"),
+            "requester": ctx.author,
+            "spotify_url": song.get("spotify_url"),
+            "source_platform": song.get("source_platform", "youtube"),
+        }
+
+        was_idle = not ctx.voice_client.is_playing() and not ctx.voice_client.is_paused()
+        state.song_queue.append(queue_song)
+
+        if was_idle:
+            await ctx.send(
+                embed=self.success_embed(
+                    f"Added to queue and starting playback: **[{song['title']}]({song['webpage_url']})**",
+                    title="Queued"
+                )
+            )
+            await self.play_next(ctx)
+        else:
+            await ctx.send(
+                embed=self.success_embed(
+                    f"Added to queue: **[{song['title']}]({song['webpage_url']})**",
+                    title="Queued"
+                )
+            )
+            await self.update_now_playing_embed(ctx.guild.id)
 
 async def setup(bot):
     await bot.add_cog(Music(bot))
