@@ -2,7 +2,41 @@ import asyncio
 import io
 import discord
 from discord.ext import commands
-from datetime import datetime
+from utils.transcripts import upload_file_to_github
+from utils.transcript_html import build_transcript_html
+
+
+async def collect_channel_messages(channel):
+    collected_messages = []
+
+    async for msg in channel.history(limit=None, oldest_first=True):
+        collected_messages.append({
+            "author": str(msg.author),
+            "avatar_url": msg.author.display_avatar.url,
+            "created_at": msg.created_at.strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "content": msg.content or "[No text content]"
+        })
+
+    return collected_messages
+
+
+async def create_and_publish_transcript(channel):
+    messages = await collect_channel_messages(channel)
+
+    html_content = build_transcript_html(
+        channel_name=channel.name,
+        ticket_name=channel.name,
+        messages=messages
+    )
+
+    file_name = f"transcripts/{channel.name}-{channel.id}.html"
+
+    public_url = await upload_file_to_github(
+        path_in_repo=file_name,
+        content=html_content,
+        commit_message=f"Add transcript for {channel.name}",
+    )
+    return public_url
 
 ticket_category_id = 1486944969074802758
 staff_role_id = 1483933455334248538
@@ -49,6 +83,18 @@ async def build_transcript(channel: discord.TextChannel) -> discord.File:
     filename = f"{channel.name}-transcript.txt"
     return discord.File(buffer, filename=filename)
 
+class TranscriptLinkView(discord.ui.View):
+    def __init__(self, transcript_url: str):
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Button(
+                label="View Transcript",
+                style=discord.ButtonStyle.link,
+                emoji="📄",
+                url=transcript_url,
+            )
+        )
+
 async def send_transcript_and_close(
         interaction: discord.Interaction,
         channel: discord.TextChannel,
@@ -62,6 +108,12 @@ async def send_transcript_and_close(
 
     log_channel = guild.get_channel(transcript_log_channel_id)
     transcript_file = await build_transcript(channel)
+
+    hosted_transcript_url = None
+    try:
+        hosted_transcript_url = await create_and_publish_transcript(channel)
+    except Exception as e:
+        print(f"Failed to upload hosted transcript: {e}")
 
     owner_id = None
     claimed_by_id = None
@@ -83,7 +135,6 @@ async def send_transcript_and_close(
     claimed_by_mention = f"<@{claimed_by_id}>" if claimed_by_id else "Not claimed"
 
     opened_ts = int(channel.created_at.timestamp())
-    closed_ts = int(discord.utils.utcnow().timestamp())
 
     embed = discord.Embed(
         title="Ticket Closed",
@@ -118,7 +169,8 @@ async def send_transcript_and_close(
     )
 
     if isinstance(log_channel, discord.TextChannel):
-        await log_channel.send(embed=embed, file=transcript_file)
+        view = TranscriptLinkView(hosted_transcript_url) if hosted_transcript_url else None
+        await log_channel.send(embed=embed, file=transcript_file, view=view)
 
     await channel.delete(
         reason=f"Ticket closed by {closing_staff} | Reason: {close_reason or 'No reason provided.'}"
@@ -525,7 +577,7 @@ class Tickets(commands.Cog):
         embed = make_embed(
             title="Support Tickets",
             description="Press the button below to open a private support ticket.",
-            colour=discord.Color.blurple(),
+            colour=discord.Color.dark_red(),
         )
         await ctx.send(embed=embed, view=TicketPanelView())
 
