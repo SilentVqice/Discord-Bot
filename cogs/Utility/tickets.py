@@ -1,5 +1,4 @@
 import asyncio
-import io
 import discord
 from discord.ext import commands
 from utils.transcripts import upload_file_to_github
@@ -50,39 +49,6 @@ def make_embed(
 ) -> discord.Embed:
     return discord.Embed(title=title, description=description, colour=colour)
 
-def escape_text(text: str) -> str:
-    return text.replace("\r", "").strip()
-
-async def build_transcript(channel: discord.TextChannel) -> discord.File:
-    lines = []
-
-    async for message in channel.history(limit=None, oldest_first=True):
-        created = message.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
-        author = f"{message.author} ({message.author.id})"
-
-        content = escape_text(message.content) if message.content else ""
-
-        if not content:
-            content = "[no text content]"
-
-        lines.append(f"[{created}] {author}: {content}")
-
-        if message.attachments:
-            for attachment in message.attachments:
-                lines.append(f"     Attachment: {attachment.url}")
-
-        if message.embeds:
-            lines.append(f"     Embeds: {len(message.embeds)}")
-
-        if message.stickers:
-            lines.append(f"     Stickers: {len(message.stickers)}")
-
-    transcript_text = "\n".join(lines) if lines else "No messages in this ticket."
-
-    buffer = io.BytesIO(transcript_text.encode("utf-8"))
-    filename = f"{channel.name}-transcript.txt"
-    return discord.File(buffer, filename=filename)
-
 class TranscriptLinkView(discord.ui.View):
     def __init__(self, transcript_url: str):
         super().__init__(timeout=None)
@@ -107,7 +73,6 @@ async def send_transcript_and_close(
         return
 
     log_channel = guild.get_channel(transcript_log_channel_id)
-    transcript_file = await build_transcript(channel)
 
     hosted_transcript_url = None
     try:
@@ -168,9 +133,27 @@ async def send_transcript_and_close(
         inline=False
     )
 
+    view = TranscriptLinkView(hosted_transcript_url) if hosted_transcript_url else None
+
     if isinstance(log_channel, discord.TextChannel):
-        view = TranscriptLinkView(hosted_transcript_url) if hosted_transcript_url else None
-        await log_channel.send(embed=embed, file=transcript_file, view=view)
+        await log_channel.send(embed=embed, view=view)
+
+    if owner_id is not None:
+        user = guild.get_member(owner_id)
+        if user is None:
+            try:
+                user = await interaction.client.fetch_user(owner_id)
+            except Exception as e:
+                print(f"Failed to fetch ticket owner for DM: {e}")
+                user = None
+
+        if user is not None:
+            try:
+                await user.send(embed=embed, view=view)
+            except discord.Forbidden:
+                print(f"Could not DM user {owner_id}; DMs are closed.")
+            except Exception as e:
+                print(f"Failed to DM transcript to user {owner_id}: {e}")
 
     await channel.delete(
         reason=f"Ticket closed by {closing_staff} | Reason: {close_reason or 'No reason provided.'}"
