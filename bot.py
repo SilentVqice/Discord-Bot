@@ -22,7 +22,12 @@ class MyBot(commands.Bot):
     async def setup_hook(self):
         await bot.load_extension("cogs.Music.music")
         await bot.load_extension("cogs.Utility.utility")
+        await bot.load_extension("cogs.Utility.tickets")
         await bot.load_extension("cogs.Moderation.moderation")
+        await bot.load_extension("cogs.Fun.games")
+        await bot.load_extension("cogs.Fun.quiz")
+        await bot.load_extension("cogs.Fun.images")
+        await bot.load_extension("cogs.Fun.social")
         await bot.load_extension("cogs.Fun.fun")
         await bot.load_extension("cogs.Fun.ai")
 

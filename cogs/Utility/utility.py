@@ -72,6 +72,11 @@ help_data = {
             "usage": ";purge <amount> or /purge <amount>",
             "description": "Deletes a number of messages from the channel.",
             "example": [";purge 10"]
+        },
+        "ticketpanel": {
+            "usage": ";ticketpanel or /ticketpanel",
+            "description": "Creates a ticket panel for opening tickets.",
+            "example": [";ticketpanel"]
         }
     },
     "Fun": {
