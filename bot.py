@@ -24,6 +24,7 @@ class MyBot(commands.Bot):
         await self.load_extension("cogs.Music.music")
         await self.load_extension("cogs.Utility.utility")
         await self.load_extension("cogs.Utility.tickets")
+        await self.load_extension("cogs.Utility.logs")
         await self.load_extension("cogs.Moderation.moderation")
         await self.load_extension("cogs.Fun.games")
         await self.load_extension("cogs.Fun.quiz")

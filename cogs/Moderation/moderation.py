@@ -1,11 +1,10 @@
 import asyncio
 import json
 import os
-from typing import Optional
-
 import discord
+from typing import Optional
+from utils.logger import LogHelper
 from discord.ext import commands
-
 from utils.config import (
     PURGE_ALLOWED_ROLES,
     KICK_ALLOWED_ROLES,
@@ -25,6 +24,7 @@ class Moderation(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.muted_role_id = 1483291125778354176
+        self.logger = LogHelper(bot)
 
 ####################################################################################################################
 # HELPERS
@@ -221,6 +221,18 @@ class Moderation(commands.Cog):
 
         try:
             await member.remove_roles(role, reason="Temporary mute expired")
+
+            await self.logger.send_log(
+                category="moderation",
+                title="Member Automatically Unmuted",
+                description=(
+                    f"**Target:** {member.mention} (`{member.id}`)\n"
+                    f"**Reason:** Temporary mute expired\n"
+                    f"**Details:** Original duration: {duration_text}"
+                ),
+                colour=discord.Color.green(),
+                thumbnail=member.display_avatar.url,
+            )
         except discord.Forbidden:
             return
 
@@ -298,12 +310,45 @@ class Moderation(commands.Cog):
 
         return embed
 
+    async def log_mod_action(
+        self,
+        action: str,
+        moderator: discord.Member | discord.User,
+        target: discord.Member | discord.User,
+        reason: str | None = None,
+        colour: discord.Colour = discord.Color.blurple(),
+        extra: str | None = None,
+    ):
+        target_mention = getattr(target, "mention", str(target))
+        target_id = getattr(target, "id", "Unknown")
+        thumbnail = getattr(getattr(target, "display_avatar", None), "url", None)
+
+        description = (
+            f"**Target:** {target_mention} (`{target_id}`)\n"
+            f"**Moderator:** {moderator.mention} (`{moderator.id}`)\n"
+            f"**Reason:** {reason or 'No reason provided.'}"
+        )
+
+        if extra:
+            description += f"\n**Details:** {extra}"
+
+        await self.logger.send_log(
+            category="moderation",
+            title=action,
+            description=description,
+            colour=colour,
+            thumbnail=thumbnail,
+        )
+
 ####################################################################################################################
 # PURGE
 ####################################################################################################################
 
     @commands.hybrid_command(name="purge", description="Deletes a number of messages from the channel.")
     async def purge(self, ctx: commands.Context, amount: Optional[int] = None):
+        if ctx.guild is None:
+            return
+
         if amount is None:
             return await self.send_command_response(
                 ctx,
@@ -325,6 +370,18 @@ class Moderation(commands.Cog):
 
         deleted = await ctx.channel.purge(limit=amount + (0 if ctx.interaction else 1))
         deleted_count = len(deleted) if ctx.interaction else max(len(deleted) - 1, 0)
+
+        await self.logger.send_log(
+            category="moderation",
+            title="Messages Purged",
+            description=(
+                f"**Moderator:** {ctx.author.mention} (`{ctx.author.id}`)\n"
+                f"**Channel:** {ctx.channel.mention}\n"
+                f"**Deleted Messages:** {deleted_count}"
+            ),
+            colour=discord.Color.blurple(),
+            thumbnail=ctx.author.display_avatar.url,
+        )
 
         await self.send_command_response(
             ctx,
@@ -365,6 +422,15 @@ class Moderation(commands.Cog):
 
         try:
             await member.kick(reason=reason or "No reason provided.")
+
+            await self.log_mod_action(
+                action="Member Kicked",
+                moderator=ctx.author,
+                target=member,
+                reason=reason,
+                colour=discord.Color.orange(),
+            )
+
             await self.send_command_response(
                 ctx,
                 embed=self.make_success_embed(
@@ -409,6 +475,15 @@ class Moderation(commands.Cog):
 
         try:
             await member.ban(reason=reason or "No reason provided.")
+
+            await self.log_mod_action(
+                action="Member Banned",
+                moderator=ctx.author,
+                target=member,
+                reason=reason,
+                colour=discord.Color.red()
+            )
+
             await self.send_command_response(
                 ctx,
                 embed=self.make_success_embed(
@@ -454,6 +529,15 @@ class Moderation(commands.Cog):
         try:
             user = await self.bot.fetch_user(user_id)
             await ctx.guild.unban(user, reason=reason or "No reason provided.")
+
+            await self.log_mod_action(
+                action="Member Unbanned",
+                moderator=ctx.author,
+                target=user,
+                reason=reason,
+                colour=discord.Color.green()
+            )
+
             await self.send_command_response(
                 ctx,
                 embed=self.make_success_embed(
@@ -544,6 +628,15 @@ class Moderation(commands.Cog):
 
         try:
             await member.add_roles(role, reason=reason or "No reason provided.")
+
+            await self.log_mod_action(
+                action="Member Muted",
+                moderator=ctx.author,
+                target=member,
+                reason=reason,
+                colour=discord.Color.dark_grey(),
+                extra=f"Duration: {duration}" if duration else "Duration: Permanent"
+            )
         except discord.Forbidden:
             return await self.send_command_response(
                 ctx,
@@ -599,24 +692,11 @@ class Moderation(commands.Cog):
         if not await self.check_role_access(ctx, UNMUTE_ALLOWED_ROLES):
             return
 
-        if ctx.guild is None:
+        if not await self.can_moderate_target(ctx, member, "unmute"):
             return
 
-        if member == ctx.author:
-            return await self.send_command_response(
-                ctx,
-                embed=self.make_error_embed("You cannot unmute yourself.", ctx=ctx),
-                ephemeral=True if ctx.interaction else False,
-                delete_after=5 if not ctx.interaction else None,
-            )
-
-        if member == self.bot.user:
-            return await self.send_command_response(
-                ctx,
-                embed=self.make_error_embed("You cannot unmute me.", ctx=ctx),
-                ephemeral=True if ctx.interaction else False,
-                delete_after=5 if not ctx.interaction else None,
-            )
+        if ctx.guild is None:
+            return
 
         role = ctx.guild.get_role(self.muted_role_id)
         if role is None:
@@ -637,6 +717,15 @@ class Moderation(commands.Cog):
 
         try:
             await member.remove_roles(role, reason=reason or "No reason provided.")
+
+            await self.log_mod_action(
+                action="Member Unmuted",
+                moderator=ctx.author,
+                target=member,
+                reason=reason,
+                colour=discord.Color.green()
+            )
+
             await self.send_command_response(
                 ctx,
                 embed=self.make_success_embed(
@@ -703,6 +792,15 @@ class Moderation(commands.Cog):
         self.save_warns(warns)
 
         warn_count = len(warns[guild_id][user_id])
+
+        await self.log_mod_action(
+            action="Member Warned",
+            moderator=ctx.author,
+            target=member,
+            reason=final_reason,
+            colour=discord.Color.orange(),
+            extra=f"Total warnings: {warn_count}"
+        )
 
         dm_embed = discord.Embed(
             title="You have been warned!",
@@ -852,6 +950,21 @@ class Moderation(commands.Cog):
         moderator = ctx.guild.get_member(removed_warn["moderator"])
         moderator_name = moderator.mention if moderator else f"ID: {removed_warn['moderator']}"
 
+        remaining = len(warns.get(guild_id, {}).get(user_id, []))
+
+        await self.log_mod_action(
+            action="Warning Removed",
+            moderator=ctx.author,
+            target=member,
+            reason=removed_warn["reason"],
+            colour=discord.Color.gold(),
+            extra=(
+                f"Removed warning #: {warn_number}\n"
+                f"Original moderator: {moderator_name}\n"
+                f"Remaining warnings: {remaining}"
+            ),
+        )
+
         embed = discord.Embed(
             title="Warning Removed",
             colour=discord.Color.green()
@@ -861,7 +974,6 @@ class Moderation(commands.Cog):
         embed.add_field(name="Original Moderator", value=moderator_name, inline=False)
         embed.add_field(name="Reason", value=removed_warn["reason"], inline=False)
 
-        remaining = len(warns.get(guild_id, {}).get(user_id, []))
         embed.set_footer(text=f"Remaining warnings: {remaining}")
 
         await self.send_command_response(
@@ -896,11 +1008,22 @@ class Moderation(commands.Cog):
         user_id = str(member.id)
 
         if guild_id in warns and user_id in warns[guild_id]:
+            cleared_count = len(warns[guild_id][user_id])
+
             del warns[guild_id][user_id]
             if not warns[guild_id]:
                 del warns[guild_id]
 
             self.save_warns(warns)
+
+            await self.log_mod_action(
+                action="Warnings Cleared",
+                moderator=ctx.author,
+                target=member,
+                reason="All warnings cleared.",
+                colour=discord.Color.green(),
+                extra=f"Cleared warnings: {cleared_count}",
+            )
 
             return await self.send_command_response(
                 ctx,

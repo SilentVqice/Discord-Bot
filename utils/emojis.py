@@ -1,0 +1,21 @@
+EMOJIS = {
+    "success": "<:success:1487727645184495768>",
+    "error": "<:error:1487727658442690681>",
+    "neutral": "<:neutral:1487727665258561566>",
+    "musicduration": "<:musicduration:1487812613579739247>",
+    "musicuploader": "<:musicuploader:1487815369354903559>",
+    "musicstatus": "<:musicstatus:1487815384852856872>",
+    "musicloop": "<:musicloop:1487815400019333220>",
+    "musicmode": "<:musicmode:1487815413793296474>",
+    "musicqueue": "<:musicqueue:1487815425331822612>",
+    "musicviews": "<:musicviews:1487815435033378968>",
+    "musiclikes": "<:musiclikes:1487815445334589490>",
+    "musicrequester": "<:musicrequester:1487815455354654770>",
+    "musicprogress": "<:musicprogress:1487815468717703319>",
+    "musicautoplay": "<:musicautoplay:1487815479442669568>",
+    "musicbassboost": "<:musicbassboost:1487815489060212746>",
+    "musicpauseresume": "<:musicpauseresume:1487821911898460311>",
+    "musicskip": "<:musicskip:1487823788199514305>",
+    "musicstop": "<:musicstop:1487824911052443788>",
+    "musiclyrics": "<:musiclyrics:1487825601820885192>"
+}

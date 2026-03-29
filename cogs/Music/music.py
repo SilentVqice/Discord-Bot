@@ -7,9 +7,13 @@ import re
 import aiohttp
 import os
 import base64
+import random
+from io import BytesIO
 from typing import Any, cast, Optional
 from discord.ext import commands
 from dotenv import load_dotenv
+from utils.emojis import EMOJIS
+from PIL import Image
 load_dotenv()
 
 ytdlp_utils.bug_reports_message = lambda *args, **kwargs: ""
@@ -61,6 +65,9 @@ class GuildMusicState:
         self.current_volume = 1.0
         self.paused_total = 0.0
         self.queue_loop = False
+        self.lock = asyncio.Lock()
+        self.preloaded = None
+        self.now_playing_view = None
 
 class MusicControls(discord.ui.View):
     def __init__(self, cog, guild_id: int):
@@ -73,9 +80,17 @@ class MusicControls(discord.ui.View):
     def get_state(self):
         return self.cog.get_state(self.guild_id)
 
+    def on_off_text(self, value: bool) -> str:
+        return "ON" if value else "OFF"
+
+    def pause_resume_label(self, vc: discord.VoiceClient | None) -> str:
+        if vc and vc.is_paused():
+            return "Resume"
+        return "Pause"
+
     def get_loop_button_text(self) -> str:
         state = self.get_state()
-        return f"Loop: {'On' if state.loop_song else 'Off'}"
+        return f"Loop: {self.on_off_text(state.loop_song)}"
 
     def get_mode_button_text(self) -> str:
         state = self.get_state()
@@ -89,13 +104,19 @@ class MusicControls(discord.ui.View):
 
     def get_bassboost_button_text(self) -> str:
         state = self.get_state()
-        return f"Bassboost: {'On' if state.bassboost_mode else 'Off'}"
+        return f"Bassboost: {self.on_off_text(state.bassboost_mode)}"
 
     def get_autoplay_button_text(self) -> str:
         state = self.get_state()
-        return f"Autoplay: {'On' if state.autoplay_mode else 'Off'}"
+        return f"Autoplay: {self.on_off_text(state.autoplay_mode)}"
+
+    def get_pause_resume_button_text(self) -> str:
+        guild = self.cog.bot.get_guild(self.guild_id)
+        vc = guild.voice_client if guild else None
+        return self.pause_resume_label(vc)
 
     def refresh_button_labels(self):
+        self.pause_resume_button.label = self.get_pause_resume_button_text()
         self.loop_button.label = self.get_loop_button_text()
         self.mode_button.label = self.get_mode_button_text()
         self.bassboost_button.label = self.get_bassboost_button_text()
@@ -135,40 +156,35 @@ class MusicControls(discord.ui.View):
             except Exception:
                 pass
 
-    @discord.ui.button(label="Pause/Resume", emoji="▶️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Pause", emoji=f"{EMOJIS['musicpauseresume']}", style=discord.ButtonStyle.secondary, row=0)
     async def pause_resume_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = self.get_state()
         vc = interaction.guild.voice_client
 
         if not vc:
-            return await interaction.response.send_message(
-                embed=self.cog.warning_embed("Nothing is playing.", title="Nothing Playing"),
-                ephemeral=True
-            )
+            return await interaction.response.send_message("I'm not in a voice channel.", ephemeral=True)
 
-        if vc.is_paused():
-            vc.resume()
-            if state.paused_at is not None:
-                state.paused_total += time.monotonic() - state.paused_at
-                state.paused_at = None
+        await interaction.response.defer(thinking=False)
 
-        elif vc.is_playing():
-            vc.pause()
-            state.paused_at = time.monotonic()
-
-        else:
-            return await interaction.response.send_message(
-                embed=self.cog.warning_embed("Nothing is playing.", title="Nothing Playing"),
-                ephemeral=True
-            )
+        async with state.lock:
+            if vc.is_playing():
+                vc.pause()
+                state.paused_at = time.monotonic()
+            elif vc.is_paused():
+                vc.resume()
+                if state.paused_at is not None:
+                    state.paused_total += time.monotonic() - state.paused_at
+                    state.paused_at = None
+            else:
+                return await interaction.followup.send("Nothing is playing.", ephemeral=True)
 
         self.refresh_button_labels()
-        await interaction.response.edit_message(
-            embed=self.cog.build_now_playing_embed(state),
+        await interaction.message.edit(
+            embed=await self.cog.build_now_playing_embed(state),
             view=self
         )
 
-    @discord.ui.button(label="Skip", emoji="⏭️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Skip", emoji=f"{EMOJIS['musicskip']}", style=discord.ButtonStyle.secondary, row=0)
     async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = self.get_state()
         vc = interaction.guild.voice_client
@@ -179,11 +195,13 @@ class MusicControls(discord.ui.View):
                 ephemeral=True
             )
 
-        state.skip_once = True
-        await interaction.response.defer()
-        vc.stop()
+        await interaction.response.defer(thinking=False)
 
-    @discord.ui.button(label="Mode: Normal", emoji="⚙️", style=discord.ButtonStyle.primary, row=0)
+        async with state.lock:
+            state.skip_once = True
+            vc.stop()
+
+    @discord.ui.button(label="Mode: Normal", emoji=f"{EMOJIS['musicmode']}", style=discord.ButtonStyle.secondary, row=0)
     async def mode_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = self.get_state()
         vc = interaction.guild.voice_client
@@ -194,19 +212,22 @@ class MusicControls(discord.ui.View):
                 ephemeral=True
             )
 
-        if not state.slowed_mode and not state.sped_mode:
-            state.slowed_mode = True
-            state.sped_mode = False
-        elif state.slowed_mode:
-            state.slowed_mode = False
-            state.sped_mode = True
-        else:
-            state.slowed_mode = False
-            state.sped_mode = False
+        await interaction.response.defer(thinking=False)
 
-        ok, error = await self.cog.apply_current_mode_from_interaction(interaction)
+        async with state.lock:
+            if not state.slowed_mode and not state.sped_mode:
+                state.slowed_mode = True
+                state.sped_mode = False
+            elif state.slowed_mode:
+                state.slowed_mode = False
+                state.sped_mode = True
+            else:
+                state.slowed_mode = False
+                state.sped_mode = False
+
+            ok, error = await self.cog.apply_current_mode_from_interaction(interaction)
         if not ok:
-            return await interaction.response.send_message(
+            return await interaction.followup.send(
                 embed=self.cog.error_embed(
                     error or "Couldn't change mode.",
                     title="Mode Change Failed"
@@ -215,25 +236,25 @@ class MusicControls(discord.ui.View):
             )
 
         self.refresh_button_labels()
-        await interaction.response.edit_message(
-            embed=self.cog.build_now_playing_embed(state),
+        await interaction.message.edit(
+            embed=await self.cog.build_now_playing_embed(state),
             view=self
         )
 
-    @discord.ui.button(label="Loop: Off", emoji="🔁", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Loop: OFF", emoji=f"{EMOJIS['musicloop']}", style=discord.ButtonStyle.secondary, row=0)
     async def loop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(thinking=False)
         state = self.get_state()
         state.loop_song = not state.loop_song
 
         self.refresh_button_labels()
-        await interaction.response.edit_message(
-            embed=self.cog.build_now_playing_embed(state),
+        await interaction.message.edit(
+            embed=await self.cog.build_now_playing_embed(state),
             view=self
         )
 
-    @discord.ui.button(label="Stop", emoji="⏹️", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label="Stop", emoji=f"{EMOJIS['musicstop']}", style=discord.ButtonStyle.secondary, row=0)
     async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        state = self.get_state()
         vc = interaction.guild.voice_client
 
         if not vc:
@@ -242,53 +263,44 @@ class MusicControls(discord.ui.View):
                 ephemeral=True
             )
 
-        if state.now_playing_updater:
-            state.now_playing_updater.cancel()
-            state.now_playing_updater = None
-
-        state.now_playing_message = None
-        state.song_queue.clear()
-        state.current_song = None
-        state.skip_once = False
-        state.loop_song = False
-        state.autoplay_mode = False
-        state.slowed_mode = False
-        state.sped_mode = False
-        state.bassboost_mode = False
-        state.current_volume = 1.0
-        state.play_started_at = None
-        state.paused_at = None
-        state.paused_total = 0.0
-        state.queue_loop = False
+        await interaction.response.defer(thinking=False)
 
         for item in self.children:
             item.disabled = True
 
-        self.refresh_button_labels()
-        await interaction.response.edit_message(
-            embed=self.cog.info_embed("Playback stopped.", title="Stopped"),
-            view=self
-        )
+        try:
+            await interaction.message.edit(
+                embed=self.cog.info_embed("Playback stopped.", title="Stopped"),
+                view=self
+            )
+        except Exception:
+            pass
 
-        vc.stop()
+        await self.cog.reset_state(self.guild_id, clear_queue=True)
+
+        try:
+            vc.stop()
+        except Exception:
+            pass
 
         try:
             await vc.disconnect()
         except Exception:
             pass
 
-    @discord.ui.button(label="Autoplay: Off", emoji="♾️", style=discord.ButtonStyle.primary, row=1)
+    @discord.ui.button(label="Autoplay: OFF", emoji=f"{EMOJIS['musicautoplay']}", style=discord.ButtonStyle.secondary, row=1)
     async def autoplay_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(thinking=False)
         state = self.get_state()
         state.autoplay_mode = not state.autoplay_mode
 
         self.refresh_button_labels()
-        await interaction.response.edit_message(
-            embed=self.cog.build_now_playing_embed(state),
+        await interaction.message.edit(
+            embed=await self.cog.build_now_playing_embed(state),
             view=self
         )
 
-    @discord.ui.button(label="Bassboost: Off", emoji="🔊", style=discord.ButtonStyle.primary, row=1)
+    @discord.ui.button(label="Bassboost: OFF", emoji=f"{EMOJIS['musicbassboost']}", style=discord.ButtonStyle.secondary, row=1)
     async def bassboost_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = self.get_state()
         vc = interaction.guild.voice_client
@@ -299,11 +311,14 @@ class MusicControls(discord.ui.View):
                 ephemeral=True
             )
 
-        state.bassboost_mode = not state.bassboost_mode
+        await interaction.response.defer(thinking=False)
 
-        ok, error = await self.cog.apply_current_mode_from_interaction(interaction)
+        async with state.lock:
+            state.bassboost_mode = not state.bassboost_mode
+
+            ok, error = await self.cog.apply_current_mode_from_interaction(interaction)
         if not ok:
-            return await interaction.response.send_message(
+            return await interaction.followup.send(
                 embed=self.cog.error_embed(
                     error or "Couldn't change bassboost mode.",
                     title="Mode Change Failed"
@@ -312,12 +327,12 @@ class MusicControls(discord.ui.View):
             )
 
         self.refresh_button_labels()
-        await interaction.response.edit_message(
-            embed=self.cog.build_now_playing_embed(state),
+        await interaction.message.edit(
+            embed=await self.cog.build_now_playing_embed(state),
             view=self
         )
 
-    @discord.ui.button(label="Queue", emoji="📂", style=discord.ButtonStyle.primary, row=1)
+    @discord.ui.button(label="Queue", emoji=f"{EMOJIS['musicqueue']}", style=discord.ButtonStyle.secondary, row=1)
     async def queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = self.get_state()
 
@@ -331,7 +346,7 @@ class MusicControls(discord.ui.View):
 
         if state.current_song:
             lines.append(
-                f"**Now Playing:**\n🎶 **[{state.current_song['title']}]({state.current_song['webpage_url']})**"
+                f"**Now Playing:**\n **[{state.current_song['title']}]({state.current_song['webpage_url']})**"
             )
 
         if state.song_queue:
@@ -346,21 +361,21 @@ class MusicControls(discord.ui.View):
             lines.append("**Up Next:**\nNo songs queued.")
 
         embed = discord.Embed(
-            title="🎼 Music Queue",
+            title="Music Queue",
             description="\n\n".join(lines),
             colour=discord.Color.blurple()
         )
         embed.set_footer(
             text=(
                 f"Total queued: {len(state.song_queue)} | "
-                f"Loop: {'On' if state.loop_song else 'Off'} | "
-                f"Queue Loop: {'On' if state.queue_loop else 'Off'}"
+                f"Loop: {'ON' if state.loop_song else 'OFF'} | "
+                f"Queue Loop: {'ON' if state.queue_loop else 'OFF'}"
             )
         )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @discord.ui.button(label="Lyrics", emoji="🎤", style=discord.ButtonStyle.primary, row=1)
+    @discord.ui.button(label="Lyrics", emoji=f"{EMOJIS['musiclyrics']}", style=discord.ButtonStyle.secondary, row=1)
     async def lyrics_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = self.get_state()
 
@@ -390,35 +405,12 @@ class Music(commands.Cog):
         self.bot = bot
         self.guild_states = {}
 
-    def make_embed(self, description: str, colour: discord.Color, *, title: str | None = None) -> discord.Embed:
-        embed = discord.Embed(
-            title=title,
-            description=description,
-            colour=colour
-        )
-        embed.timestamp = discord.utils.utcnow()
-        return embed
-
-    def success_embed(self, description: str, *, title: str = "Success") -> discord.Embed:
-        return self.make_embed(f"✅ {description}", discord.Color.green(), title=title)
-
-    def error_embed(self, description: str, *, title: str = "Error") -> discord.Embed:
-        return self.make_embed(f"❌ {description}", discord.Color.red(), title=title)
-
-    def warning_embed(self, description: str, *, title: str = "Warning") -> discord.Embed:
-        return self.make_embed(f"⚠️ {description}", discord.Color.orange(), title=title)
-
-    def info_embed(self, description: str, *, title: str = "Info") -> discord.Embed:
-        return self.make_embed(f"ℹ️ {description}", discord.Color.blurple(), title=title)
-
-    def get_state(self, guild_id: int) -> GuildMusicState:
-        if guild_id not in self.guild_states:
-            self.guild_states[guild_id] = GuildMusicState()
-        return self.guild_states[guild_id]
-
-    async def apply_current_mode_from_interaction(self, interaction: discord.Interaction):
-        state = self.get_state(interaction.guild.id)
-        vc = interaction.guild.voice_client if interaction.guild else None
+    async def _apply_current_mode_to_voice_client(
+        self,
+        guild_id: int,
+        vc: discord.VoiceClient | None
+    ) -> tuple[bool, str | None]:
+        state = self.get_state(guild_id)
 
         if vc is None or state.current_song is None:
             return False, "Nothing is playing."
@@ -426,12 +418,16 @@ class Music(commands.Cog):
         if not (vc.is_playing() or vc.is_paused()):
             return False, "Nothing is playing."
 
-        try:
-            fresh_song = await self.get_song_info(state.current_song["url"])
-        except Exception as e:
-            return False, f"Couldn't reload the current track: {e}"
+        audio_url = state.current_song.get("audio_url")
 
-        audio_url = fresh_song.get("audio_url")
+        if not audio_url:
+            try:
+                fresh_song = await self.get_song_info(state.current_song["url"])
+                audio_url = fresh_song.get("audio_url")
+                state.current_song["audio_url"] = audio_url
+            except Exception as e:
+                return False, f"Couldn't reload the current track: {e}"
+
         if not audio_url:
             return False, "Couldn't rebuild the current stream."
 
@@ -463,6 +459,155 @@ class Music(commands.Cog):
             state.paused_at = time.monotonic()
 
         return True, None
+
+    async def resolve_query_to_queue_song(self, ctx: commands.Context, query: str) -> dict[str, Any]:
+        if self.is_spotify_track_url(query):
+            song = await self.resolve_spotify_to_youtube(query)
+        else:
+            song = await self.get_song_info(query)
+
+        return {
+            "url": song.get("url") or song.get("webpage_url"),
+            "title": song.get("title", "Unknown"),
+            "webpage_url": song.get("webpage_url"),
+            "thumbnail": song.get("thumbnail"),
+            "duration": song.get("duration", 0),
+            "uploader": song.get("uploader", "Unknown"),
+            "views": song.get("views"),
+            "likes": song.get("likes"),
+            "requester": ctx.author,
+            "spotify_url": song.get("spotify_url"),
+            "source_platform": song.get("source_platform", "youtube"),
+        }
+
+    async def reset_state(self, guild_id: int, *, clear_queue: bool = True):
+        state = self.get_state(guild_id)
+
+        async with state.lock:
+            if state.now_playing_updater:
+                state.now_playing_updater.cancel()
+                state.now_playing_updater = None
+
+            if state.now_playing_message:
+                try:
+                    await state.now_playing_message.delete()
+                except Exception:
+                    pass
+
+            state.now_playing_message = None
+            state.now_playing_view = None
+
+            if clear_queue:
+                state.song_queue.clear()
+
+            state.current_song = None
+            state.skip_once = False
+            state.loop_song = False
+            state.autoplay_mode = False
+            state.slowed_mode = False
+            state.sped_mode = False
+            state.bassboost_mode = False
+            state.current_volume = 1.0
+            state.play_started_at = None
+            state.paused_at = None
+            state.paused_total = 0.0
+            state.queue_loop = False
+            state.preloaded = None
+
+    async def preload_next(self, guild_id: int):
+        state = self.get_state(guild_id)
+
+        if not state.song_queue:
+            state.preloaded = None
+            return
+
+        next_song = state.song_queue[0]
+        track_url = next_song.get("url") or next_song.get("webpage_url")
+
+        if not track_url:
+            state.preloaded = None
+            return
+
+        try:
+            fresh_song = await self.get_song_info(track_url)
+
+            audio_url = fresh_song.get("audio_url")
+            if not audio_url:
+                state.preloaded = None
+                return
+
+            state.preloaded = {
+                "track_url": track_url,
+                "fresh_song": fresh_song,
+                "audio_url": audio_url
+            }
+
+        except Exception:
+            state.preloaded = None
+
+    async def get_dominant_colour_from_url(self, url: str) -> discord.Colour:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        return discord.Color.red()
+
+                    data = await resp.read()
+
+            with Image.open(BytesIO(data)).convert("RGB") as img:
+                img = img.resize((64, 64))
+
+                colours = img.getcolors(64 * 64)
+                if not colours:
+                    return discord.Color.red()
+
+                colours.sort(key=lambda x: x[0], reverse=True)
+
+                for _, (r, g, b) in colours:
+                    if max(r, g, b) < 35:
+                        continue
+                    if min(r, g, b) > 235:
+                        continue
+                    if abs(r - g) < 10 and abs(g - b) < 10:
+                        continue
+
+                    return discord.Color.from_rgb(r, g, b)
+
+                _, (r, g, b) = colours[0]
+                return discord.Color.from_rgb(r, g, b)
+
+        except Exception:
+            return discord.Color.red()
+
+    def make_embed(self, description: str, colour: discord.Color, *, title: str | None = None) -> discord.Embed:
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            colour=colour
+        )
+        embed.timestamp = discord.utils.utcnow()
+        return embed
+
+    def success_embed(self, description: str, *, title: str = "Success") -> discord.Embed:
+        return self.make_embed(f"{description}", discord.Color.green(), title=title)
+
+    def error_embed(self, description: str, *, title: str = "Error") -> discord.Embed:
+        return self.make_embed(f"{description}", discord.Color.red(), title=title)
+
+    def warning_embed(self, description: str, *, title: str = "Warning") -> discord.Embed:
+        return self.make_embed(f"{description}", discord.Color.orange(), title=title)
+
+    def info_embed(self, description: str, *, title: str = "Info") -> discord.Embed:
+        return self.make_embed(f"{description}", discord.Color.blurple(), title=title)
+
+    def get_state(self, guild_id: int) -> GuildMusicState:
+        if guild_id not in self.guild_states:
+            self.guild_states[guild_id] = GuildMusicState()
+        return self.guild_states[guild_id]
+
+    async def apply_current_mode_from_interaction(self, interaction: discord.Interaction) -> tuple[bool, str | None]:
+        vc = interaction.guild.voice_client if interaction.guild else None
+        return await self._apply_current_mode_to_voice_client(interaction.guild.id, vc)
 
     def is_spotify_track_url(self, query: str) -> bool:
         return bool(spotify_track_url_re.search(query.strip()))
@@ -571,7 +716,7 @@ class Music(commands.Cog):
             "source_platform": "spotify",
         }
 
-    async def get_song_info(self, query):
+    async def get_song_info(self, query: str) -> dict[str, Any]:
         loop = asyncio.get_running_loop()
 
         info = await loop.run_in_executor(
@@ -762,55 +907,10 @@ class Music(commands.Cog):
         )
         return discord.PCMVolumeTransformer(source, volume=volume)
 
-    async def apply_current_mode(self, ctx):
-        state = self.get_state(ctx.guild.id)
-        vc = ctx.voice_client
+    async def apply_current_mode(self, ctx) -> tuple[bool, str | None]:
+        return await self._apply_current_mode_to_voice_client(ctx.guild.id, ctx.voice_client)
 
-        if vc is None or state.current_song is None:
-            return False, "Nothing is playing."
-
-        if not (vc.is_playing() or vc.is_paused()):
-            return False, "Nothing is playing."
-
-        try:
-            fresh_song = await self.get_song_info(state.current_song["url"])
-        except Exception as e:
-            return False, f"Couldn't reload the current track: {e}"
-
-        audio_url = fresh_song.get("audio_url")
-        if not audio_url:
-            return False, "Couldn't rebuild the current stream."
-
-        position = self.get_current_playback_position(state)
-        was_paused = vc.is_paused()
-
-        if was_paused:
-            vc.resume()
-            if state.paused_at is not None:
-                state.paused_total += time.monotonic() - state.paused_at
-                state.paused_at = None
-
-        new_source = self.make_audio_source(
-            audio_url,
-            start_at=position,
-            slowed=state.slowed_mode,
-            sped=state.sped_mode,
-            bassboost=state.bassboost_mode,
-            volume=state.current_volume
-        )
-
-        vc.source = new_source
-
-        state.play_started_at = time.monotonic() - position
-        state.paused_at = None
-
-        if was_paused:
-            vc.pause()
-            state.paused_at = time.monotonic()
-
-        return True, None
-
-    def build_now_playing_embed(self, state: GuildMusicState) -> discord.Embed:
+    async def build_now_playing_embed(self, state: GuildMusicState) -> discord.Embed:
         song = state.current_song
         if song is None:
             return discord.Embed(title="Nothing Playing", description="No active track.")
@@ -833,39 +933,41 @@ class Music(commands.Cog):
         status_text = "Paused" if state.paused_at is not None else "Playing"
         mode_text = self.get_mode_text(state)
 
+        embed_colour = song.get("embed_colour", discord.Color.red())
+
         embed = discord.Embed(
-            title="🎶 Now Playing",
+            title="Now Playing",
             description=f"**[{title}]({webpage_url})**" if webpage_url else f"**{title}**",
-            colour=discord.Colour.red(),
-            url=webpage_url if webpage_url else None
+            colour=embed_colour
         )
 
-        embed.add_field(name="⏱️ Duration", value=duration_text, inline=True)
-        embed.add_field(name="📺 Uploader", value=uploader, inline=True)
-        embed.add_field(name="▶️ Status", value=status_text, inline=True)
+        embed.add_field(name=f"{EMOJIS['musicduration']} Duration", value=duration_text, inline=True)
+        embed.add_field(name=f"{EMOJIS['musicuploader']} Uploader", value=uploader, inline=True)
+        embed.add_field(name=f"{EMOJIS['musicstatus']} Status", value=status_text, inline=True)
 
-        embed.add_field(name="🔁 Loop", value="ON" if state.loop_song else "OFF", inline=True)
-        embed.add_field(name="⚙️ Mode", value=mode_text, inline=True)
-        embed.add_field(name="📂 Queue", value=str(len(state.song_queue)), inline=True)
+        embed.add_field(name=f"{EMOJIS['musicloop']} Loop", value="ON" if state.loop_song else "OFF", inline=True)
+        embed.add_field(name=f"{EMOJIS['musicmode']} Mode", value=mode_text, inline=True)
+        embed.add_field(name=f"{EMOJIS['musicqueue']} Queue", value=str(len(state.song_queue)), inline=True)
 
         if views is not None:
-            embed.add_field(name="👀 Views", value=f"{views:,}", inline=True)
+            embed.add_field(name=f"{EMOJIS['musicviews']} Views", value=f"{views:,}", inline=True)
 
         if likes is not None:
-            embed.add_field(name="👍 Likes", value=f"{likes:,}", inline=True)
+            embed.add_field(name=f"{EMOJIS['musiclikes']} Likes", value=f"{likes:,}", inline=True)
 
         if requester is not None:
-            embed.add_field(name="🙋 Requester", value=requester.mention, inline=True)
+            embed.add_field(name=f"{EMOJIS['musicrequester']} Requester", value=requester.mention, inline=True)
 
         embed.add_field(
-            name="📍 Progress",
+            name=f"{EMOJIS['musicprogress']} Progress",
             value=f"`{elapsed_text} / {duration_text}`\n`{progress_bar}`",
             inline=True
         )
 
-        embed.add_field(name="♾️ Autoplay", value="ON" if state.autoplay_mode else "OFF", inline=True)
-
-        embed.add_field(name="🔊 Bassboost", value="ON" if state.bassboost_mode else "OFF", inline=True)
+        embed.add_field(name=f"{EMOJIS['musicautoplay']} Autoplay", value="ON" if state.autoplay_mode else "OFF",
+                        inline=True)
+        embed.add_field(name=f"{EMOJIS['musicbassboost']} Bassboost", value="ON" if state.bassboost_mode else "OFF",
+                        inline=True)
 
         if thumbnail:
             embed.set_image(url=thumbnail)
@@ -875,7 +977,6 @@ class Music(commands.Cog):
             footer_text += " • Resolved from Spotify"
 
         embed.set_footer(text=footer_text)
-
         return embed
 
     async def update_now_playing_embed(self, guild_id: int):
@@ -885,12 +986,12 @@ class Music(commands.Cog):
             return
 
         try:
-            view = MusicControls(self, guild_id)
-            view.message = state.now_playing_message
+            if state.now_playing_view is not None:
+                state.now_playing_view.refresh_button_labels()
 
             await state.now_playing_message.edit(
-                embed=self.build_now_playing_embed(state),
-                view=view
+                embed=await self.build_now_playing_embed(state),
+                view=state.now_playing_view
             )
         except Exception as e:
             print(f"Failed to update now playing embed: {e}")
@@ -1061,10 +1162,7 @@ class Music(commands.Cog):
             await asyncio.sleep(0.5)
 
         try:
-            if self.is_spotify_track_url(query):
-                song = await self.resolve_spotify_to_youtube(query)
-            else:
-                song = await self.get_song_info(query)
+            queue_song = await self.resolve_query_to_queue_song(ctx, query)
         except Exception as e:
             return await ctx.send(
                 embed=self.error_embed(
@@ -1073,127 +1171,139 @@ class Music(commands.Cog):
                 )
             )
 
-        queue_song = {
-            "url": song.get("url") or song.get("webpage_url"),
-            "title": song.get("title", "Unknown"),
-            "webpage_url": song.get("webpage_url"),
-            "thumbnail": song.get("thumbnail"),
-            "duration": song.get("duration", 0),
-            "uploader": song.get("uploader", "Unknown"),
-            "views": song.get("views"),
-            "likes": song.get("likes"),
-            "requester": ctx.author,
-            "spotify_url": song.get("spotify_url"),
-            "source_platform": song.get("source_platform", "youtube"),
-        }
-
         state.song_queue.append(queue_song)
 
         if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
             await ctx.send(
                 embed=self.success_embed(
-                    f"Added to queue: **[{song['title']}]({song['webpage_url']})**",
+                    f"Added to queue: **[{queue_song['title']}]({queue_song['webpage_url']})**",
                     title="Queued"
                 )
             )
         else:
             await self.play_next(ctx)
 
-    async def play_next(self, ctx):
+    async def play_next(self, ctx) -> None:
         state = self.get_state(ctx.guild.id)
 
-        if not ctx.voice_client or not ctx.voice_client.is_connected():
-            return
+        should_disconnect = False
 
-        if state.loop_song and state.current_song and not state.skip_once:
-            queued_song = state.current_song
-        else:
-            state.skip_once = False
+        async with state.lock:
+            if not ctx.voice_client or not ctx.voice_client.is_connected():
+                return
 
-            if not state.song_queue:
-                if state.autoplay_mode and state.current_song is not None:
-                    auto_song = await self.get_autoplay_song(
-                        state,
-                        state.current_song,
-                        requester=ctx.guild.me if ctx.guild else None
-                    )
-                    if auto_song is not None:
-                        state.song_queue.append(auto_song)
+            if state.loop_song and state.current_song and not state.skip_once:
+                queued_song = state.current_song
+            else:
+                state.skip_once = False
 
                 if not state.song_queue:
-                    state.current_song = None
-
-                    if state.now_playing_updater:
-                        state.now_playing_updater.cancel()
-                        state.now_playing_updater = None
-
-                    state.now_playing_message = None
-                    state.skip_once = False
-                    state.loop_song = False
-                    state.queue_loop = False
-                    state.autoplay_mode = False
-                    state.slowed_mode = False
-                    state.sped_mode = False
-                    state.bassboost_mode = False
-                    state.current_volume = 1.0
-                    state.play_started_at = None
-                    state.paused_at = None
-                    state.paused_total = 0.0
-
-                    await ctx.voice_client.disconnect()
-                    await ctx.channel.send(
-                        embed=self.info_embed(
-                            "Queue finished. Disconnected from the voice channel.",
-                            title="Disconnected"
+                    if state.autoplay_mode and state.current_song is not None:
+                        auto_song = await self.get_autoplay_song(
+                            state,
+                            state.current_song,
+                            requester=ctx.guild.members.me if ctx.guild else None
                         )
-                    )
-                    return
+                        if auto_song is not None:
+                            state.song_queue.append(auto_song)
 
-            queued_song = state.song_queue.pop(0)
+                    if not state.song_queue:
+                        should_disconnect = True
+                    else:
+                        should_disconnect = False
 
-            if state.queue_loop:
-                state.song_queue.append(queued_song.copy())
+                if should_disconnect:
+                    pass
+                else:
+                    queued_song = state.song_queue.pop(0)
+
+                    if state.queue_loop:
+                        state.song_queue.append(queued_song.copy())
+
+                queued_song = state.song_queue.pop(0)
+
+                if state.queue_loop:
+                    state.song_queue.append(queued_song.copy())
 
         try:
             track_url = queued_song.get("url") or queued_song.get("webpage_url")
 
             if not track_url:
                 await ctx.send(
-                    embed=self.error_embed("This queued track has no playable URL.", title="Playback Failed")
+                    embed=self.error_embed(
+                        "This queued track has no playable URL. Skipping it.",
+                        title="Playback Failed"
+                    )
                 )
-                return
+                return await self.play_next(ctx)
 
             if self.is_spotify_track_url(track_url):
                 await ctx.send(
                     embed=self.error_embed(
-                        "A Spotify link was sent to the playback loader instead of a resolved YouTube link.",
+                        "A Spotify link reached the playback stage instead of a resolved YouTube link. Skipping it.",
                         title="Playback Failed"
+                    )
+                )
+                return await self.play_next(ctx)
+
+            if state.preloaded and state.preloaded.get("track_url") == track_url:
+                fresh_song = state.preloaded["fresh_song"]
+                audio_url = state.preloaded["audio_url"]
+                state.preloaded = None
+            else:
+                fresh_song = await self.get_song_info(track_url)
+                audio_url = fresh_song.get("audio_url")
+        except Exception as e:
+            await ctx.send(
+                embed=self.error_embed(
+                    f"Couldn't load this track, so it was skipped:\n```py\n{e}\n```",
+                    title="Track Load Failed"
+                )
+            )
+            return await self.play_next(ctx)
+
+        if not audio_url:
+            await ctx.send(
+                embed=self.error_embed(
+                    "Couldn't get a playable stream for this track. Skipping it.",
+                    title="Playback Failed"
+                )
+            )
+            return await self.play_next(ctx)
+
+        async with state.lock:
+            state.current_song = {
+                "url": fresh_song.get("url", queued_song.get("url")),
+                "title": fresh_song.get("title", queued_song.get("title", "Unknown")),
+                "webpage_url": fresh_song.get("webpage_url", queued_song.get("webpage_url", "")),
+                "audio_url": audio_url,
+                "thumbnail": fresh_song.get("thumbnail", queued_song.get("thumbnail")),
+                "duration": fresh_song.get("duration", queued_song.get("duration", 0)),
+                "uploader": fresh_song.get("uploader", queued_song.get("uploader", "Unknown")),
+                "views": fresh_song.get("views", queued_song.get("views")),
+                "likes": fresh_song.get("likes", queued_song.get("likes")),
+                "requester": queued_song.get("requester"),
+                "source_platform": queued_song.get("source_platform", "youtube"),
+            }
+
+            if should_disconnect:
+                await self.reset_state(ctx.guild.id, clear_queue=True)
+
+                await ctx.voice_client.disconnect()
+                await ctx.channel.send(
+                    embed=self.info_embed(
+                        "Queue finished. Disconnected from the voice channel.",
+                        title="Disconnected"
                     )
                 )
                 return
 
-            fresh_song = await self.get_song_info(track_url)
-        except Exception as e:
-            await ctx.send(embed=self.error_embed(f"Couldn't load this track:\n```py\n{e}\n```", title="Track Load Failed"))
-            return
-
-        audio_url = fresh_song.get("audio_url")
-        if not audio_url:
-            await ctx.send(embed=self.error_embed("Couldn't get a playable stream for this track.", title="Playback Failed"))
-            return
-
-        state.current_song = {
-            "url": fresh_song.get("url", queued_song.get("url")),
-            "title": fresh_song.get("title", queued_song.get("title", "Unknown")),
-            "webpage_url": fresh_song.get("webpage_url", queued_song.get("webpage_url", "")),
-            "thumbnail": fresh_song.get("thumbnail", queued_song.get("thumbnail")),
-            "duration": fresh_song.get("duration", queued_song.get("duration", 0)),
-            "uploader": fresh_song.get("uploader", queued_song.get("uploader", "Unknown")),
-            "views": fresh_song.get("views", queued_song.get("views")),
-            "likes": fresh_song.get("likes", queued_song.get("likes")),
-            "requester": queued_song.get("requester"),
-            "source_platform": queued_song.get("source_platform", "youtube"),
-        }
+            thumbnail = state.current_song.get("thumbnail")
+            if thumbnail:
+                colour = await self.get_dominant_colour_from_url(thumbnail)
+                state.current_song["embed_colour"] = colour
+            else:
+                state.current_song["embed_colour"] = discord.Color.red()
 
         source = self.make_audio_source(
             audio_url,
@@ -1207,35 +1317,44 @@ class Music(commands.Cog):
             if error:
                 print(f"Playback error: {error}")
 
-            if ctx.voice_client and ctx.voice_client.is_connected():
-                future = asyncio.run_coroutine_threadsafe(self.play_next(ctx), self.bot.loop)
-                try:
-                    future.result()
-                except Exception as e:
-                    print(f"Error in play_next: {e}")
+            future = asyncio.run_coroutine_threadsafe(self.play_next(ctx), self.bot.loop)
+
+            def _log_future_result(fut):
+                exc = fut.exception()
+                if exc:
+                    print(f"Error in play_next: {exc}")
+
+            future.add_done_callback(_log_future_result)
 
         if not ctx.voice_client or not ctx.voice_client.is_connected():
             return
 
         ctx.voice_client.play(source, after=after_playback)
+        asyncio.create_task(self.preload_next(ctx.guild.id))
 
-        state.play_started_at = time.monotonic()
-        state.paused_at = None
-        state.paused_total = 0.0
+        async with state.lock:
+            state.play_started_at = time.monotonic()
+            state.paused_at = None
+            state.paused_total = 0.0
 
-        if state.now_playing_updater:
-            state.now_playing_updater.cancel()
-            state.now_playing_updater = None
+            if state.now_playing_updater:
+                state.now_playing_updater.cancel()
+                state.now_playing_updater = None
 
-        if state.now_playing_message:
-            try:
-                await state.now_playing_message.delete()
-            except Exception:
-                pass
+            if state.now_playing_message:
+                try:
+                    await state.now_playing_message.delete()
+                except Exception:
+                    pass
+
+            state.now_playing_message = None
+            state.now_playing_view = None
 
         view = MusicControls(self, ctx.guild.id)
+        state.now_playing_view = view
+
         state.now_playing_message = await ctx.channel.send(
-            embed=self.build_now_playing_embed(state),
+            embed=await self.build_now_playing_embed(state),
             view=view
         )
         view.message = state.now_playing_message
@@ -1318,10 +1437,15 @@ class Music(commands.Cog):
             )
 
         if state.song_queue:
+            shown_songs = state.song_queue[:15]
             queue_text = "\n".join(
                 f"`{i}.` **[{song['title']}]({song['webpage_url']})**"
-                for i, song in enumerate(state.song_queue, start=1)
+                for i, song in enumerate(shown_songs, start=1)
             )
+
+            if len(state.song_queue) > 15:
+                queue_text += f"\n...and **{len(state.song_queue) - 15}** more."
+
             lines.append(f"**Up Next:**\n{queue_text}")
         else:
             lines.append("**Up Next:**\nNo songs queued.")
@@ -1389,7 +1513,6 @@ class Music(commands.Cog):
                                          title="Not Enough Songs")
             )
 
-        import random
         random.shuffle(state.song_queue)
 
         await ctx.send(
@@ -1430,30 +1553,17 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(name="leave", description="Stops playback and disconnects from voice.")
     async def leave(self, ctx: commands.Context):
-        state = self.get_state(ctx.guild.id)
-
         if not ctx.voice_client or not ctx.voice_client.is_connected():
-            return await ctx.send(embed=self.warning_embed("I'm not in a voice channel.", title="Not Connected"))
+            return await ctx.send(
+                embed=self.warning_embed("I'm not in a voice channel.", title="Not Connected")
+            )
 
-        if state.now_playing_updater:
-            state.now_playing_updater.cancel()
-            state.now_playing_updater = None
+        try:
+            ctx.voice_client.stop()
+        except Exception:
+            pass
 
-        state.now_playing_message = None
-        state.song_queue.clear()
-        state.current_song = None
-        state.skip_once = False
-        state.loop_song = False
-        state.autoplay_mode = False
-        state.slowed_mode = False
-        state.sped_mode = False
-        state.bassboost_mode = False
-        state.current_volume = 1.0
-        state.play_started_at = None
-        state.paused_at = None
-        state.paused_total = 0.0
-        state.queue_loop = False
-
+        await self.reset_state(ctx.guild.id, clear_queue=True)
         await ctx.voice_client.disconnect()
         await ctx.send(embed=self.info_embed("Disconnected from the voice channel.", title="Disconnected"))
 
@@ -1730,10 +1840,7 @@ class Music(commands.Cog):
             await asyncio.sleep(0.5)
 
         try:
-            if self.is_spotify_track_url(query):
-                song = await self.resolve_spotify_to_youtube(query)
-            else:
-                song = await self.get_song_info(query)
+            queue_song = await self.resolve_query_to_queue_song(ctx, query)
         except Exception as e:
             return await ctx.send(
                 embed=self.error_embed(
@@ -1742,27 +1849,13 @@ class Music(commands.Cog):
                 )
             )
 
-        queue_song = {
-            "url": song.get("url") or song.get("webpage_url"),
-            "title": song.get("title", "Unknown"),
-            "webpage_url": song.get("webpage_url"),
-            "thumbnail": song.get("thumbnail"),
-            "duration": song.get("duration", 0),
-            "uploader": song.get("uploader", "Unknown"),
-            "views": song.get("views"),
-            "likes": song.get("likes"),
-            "requester": ctx.author,
-            "spotify_url": song.get("spotify_url"),
-            "source_platform": song.get("source_platform", "youtube"),
-        }
-
         was_idle = not ctx.voice_client.is_playing() and not ctx.voice_client.is_paused()
         state.song_queue.append(queue_song)
 
         if was_idle:
             await ctx.send(
                 embed=self.success_embed(
-                    f"Added to queue and starting playback: **[{song['title']}]({song['webpage_url']})**",
+                    f"Added to queue and starting playback: **[{queue_song['title']}]({queue_song['webpage_url']})**",
                     title="Queued"
                 )
             )
@@ -1770,7 +1863,7 @@ class Music(commands.Cog):
         else:
             await ctx.send(
                 embed=self.success_embed(
-                    f"Added to queue: **[{song['title']}]({song['webpage_url']})**",
+                    f"Added to queue: **[{queue_song['title']}]({queue_song['webpage_url']})**",
                     title="Queued"
                 )
             )

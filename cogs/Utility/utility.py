@@ -10,6 +10,11 @@ from discord.ext import commands
 
 help_data = {
     "Moderation": {
+        "purge": {
+            "usage": ";purge <amount> or /purge <amount>",
+            "description": "Deletes a number of messages from the channel.",
+            "example": [";purge 10"]
+        },
         "ban": {
             "usage": ";ban <@user> [reason] or /ban <@user> [reason]",
             "description": "Bans a member from the server.",
@@ -67,11 +72,6 @@ help_data = {
             "usage": ";info [@user] or /info [@user]",
             "description": "Shows information about you or another user.",
             "example": [";info", ";info @Velourie"]
-        },
-        "purge": {
-            "usage": ";purge <amount> or /purge <amount>",
-            "description": "Deletes a number of messages from the channel.",
-            "example": [";purge 10"]
         },
         "ticketpanel": {
             "usage": ";ticketpanel or /ticketpanel",
