@@ -1,2 +1,29 @@
-[2026-03-30 15:23:03] [INFO    ] discord.client: logging in using static token
-[2026-03-30 15:23:06] [INFO    ] discord.gateway: Shard ID None has connected to Gateway (Session ID: f281dafa789fcd36a14f8310c20bf86e).
+[2026-03-30 15:38:35] [INFO    ] discord.client: logging in using static token
+[2026-03-30 15:38:37] [INFO    ] discord.gateway: Shard ID None has connected to Gateway (Session ID: 4d50ce4725ead4ff3b1d712d84ea9382).
+[2026-03-30 15:38:52] [INFO    ] discord.voice_state: Connecting to voice...
+[2026-03-30 15:38:52] [INFO    ] discord.voice_state: Starting voice handshake... (connection attempt 1)
+[2026-03-30 15:38:53] [INFO    ] discord.voice_state: Voice handshake complete. Endpoint found: c-otp02-e1e07ade.discord.media:2087
+[2026-03-30 15:38:53] [INFO    ] discord.voice_state: Voice connection complete.
+[2026-03-30 15:40:35] [INFO    ] discord.player: ffmpeg process 27108 has not terminated. Waiting to terminate...
+[2026-03-30 15:40:35] [INFO    ] discord.player: ffmpeg process 27108 should have terminated with a return code of 1.
+[2026-03-30 15:43:44] [INFO    ] discord.player: ffmpeg process 27056 successfully terminated with return code of 0.
+[2026-03-30 15:44:45] [INFO    ] discord.player: ffmpeg process 7184 has not terminated. Waiting to terminate...
+[2026-03-30 15:44:45] [INFO    ] discord.player: ffmpeg process 7184 should have terminated with a return code of 1.
+[2026-03-30 15:46:04] [INFO    ] discord.player: ffmpeg process 13640 has not terminated. Waiting to terminate...
+[2026-03-30 15:46:04] [INFO    ] discord.player: ffmpeg process 13640 should have terminated with a return code of 1.
+[2026-03-30 15:50:20] [INFO    ] discord.player: ffmpeg process 22672 successfully terminated with return code of 0.
+[2026-03-30 15:53:24] [INFO    ] discord.player: ffmpeg process 23028 successfully terminated with return code of 0.
+[2026-03-30 15:53:29] [INFO    ] discord.player: ffmpeg process 8764 has not terminated. Waiting to terminate...
+[2026-03-30 15:53:29] [INFO    ] discord.player: ffmpeg process 8764 should have terminated with a return code of 1.
+[2026-03-30 15:53:32] [INFO    ] discord.voice_state: The voice handshake is being terminated for Channel ID 1484262937731272786 (Guild ID 1483248089757388861)
+[2026-03-30 15:53:46] [INFO    ] discord.voice_state: Connecting to voice...
+[2026-03-30 15:53:46] [INFO    ] discord.voice_state: Starting voice handshake... (connection attempt 1)
+[2026-03-30 15:53:46] [INFO    ] discord.voice_state: Voice handshake complete. Endpoint found: c-otp02-e1e07ade.discord.media:2087
+[2026-03-30 15:53:46] [INFO    ] discord.voice_state: Voice connection complete.
+[2026-03-30 15:54:54] [INFO    ] discord.player: ffmpeg process 11272 has not terminated. Waiting to terminate...
+[2026-03-30 15:54:54] [INFO    ] discord.player: ffmpeg process 11272 should have terminated with a return code of 1.
+[2026-03-30 15:54:55] [INFO    ] discord.voice_state: The voice handshake is being terminated for Channel ID 1484262937731272786 (Guild ID 1483248089757388861)
+[2026-03-30 15:55:23] [INFO    ] discord.voice_state: Connecting to voice...
+[2026-03-30 15:55:23] [INFO    ] discord.voice_state: Starting voice handshake... (connection attempt 1)
+[2026-03-30 15:55:23] [INFO    ] discord.voice_state: Voice handshake complete. Endpoint found: c-otp02-e1e07ade.discord.media:2087
+[2026-03-30 15:55:23] [INFO    ] discord.voice_state: Voice connection complete.

@@ -1403,22 +1403,19 @@ class Music(commands.Cog):
         queued_song = None
         fresh_song = None
         audio_url = None
+        previous_song = None
 
         async with state.lock:
-            if state.loop_song and state.current_song and not state.skip_once:
-                queued_song = state.current_song.copy()
-                fresh_song = state.current_song.copy()
-                audio_url = state.current_song.get("audio_url")
+            previous_song = state.current_song.copy() if state.current_song else None
+
+            if state.loop_song and previous_song and not state.skip_once:
+                queued_song = previous_song.copy()
+                fresh_song = previous_song.copy()
+                audio_url = previous_song.get("audio_url")
             else:
                 state.skip_once = False
 
-                if not state.song_queue:
-                    if state.preloaded is not None:
-                        queued_song = state.preloaded.get("queued_song")
-                        fresh_song = state.preloaded.get("fresh_song")
-                        audio_url = state.preloaded.get("audio_url")
-                        state.preloaded = None
-                else:
+                if state.song_queue:
                     queued_song = state.song_queue.pop(0)
 
                     if state.queue_loop:
@@ -1431,14 +1428,20 @@ class Music(commands.Cog):
                         audio_url = state.preloaded.get("audio_url")
                         state.preloaded = None
 
+                elif state.preloaded is not None:
+                    queued_song = state.preloaded.get("queued_song")
+                    fresh_song = state.preloaded.get("fresh_song")
+                    audio_url = state.preloaded.get("audio_url")
+                    state.preloaded = None
+
         if queued_song is None:
-            if state.autoplay_mode and state.current_song is not None:
+            if state.autoplay_mode and previous_song is not None:
                 for attempt in range(3):
                     try:
                         auto_song = await self.get_autoplay_song(
                             state,
-                            state.current_song,
-                            requester=state.current_song.get("requester")
+                            previous_song,
+                            requester=previous_song.get("requester")
                         )
                         if auto_song is not None:
                             queued_song = auto_song
@@ -1448,12 +1451,13 @@ class Music(commands.Cog):
 
                     await asyncio.sleep(0.75)
 
-                    if state.preloaded is not None:
-                        queued_song = state.preloaded.get("queued_song")
-                        fresh_song = state.preloaded.get("fresh_song")
-                        audio_url = state.preloaded.get("audio_url")
-                        state.preloaded = None
-                        break
+                    async with state.lock:
+                        if state.preloaded is not None:
+                            queued_song = state.preloaded.get("queued_song")
+                            fresh_song = state.preloaded.get("fresh_song")
+                            audio_url = state.preloaded.get("audio_url")
+                            state.preloaded = None
+                            break
 
             if queued_song is None:
                 print("Autoplay failed: no valid candidate found, disconnecting.")
@@ -1644,14 +1648,18 @@ class Music(commands.Cog):
 
     @commands.hybrid_command(name="skip", description="Skips the current song.")
     async def skip(self, ctx: commands.Context):
+        vc = ctx.voice_client
+        if not vc or not vc.is_connected():
+            return await ctx.send(embed=self.info_embed("I'm not in a voice channel."))
+
+        if not (vc.is_playing() or vc.is_paused()):
+            return await ctx.send(embed=self.info_embed("There is nothing to skip."))
+
         state = self.get_state(ctx.guild.id)
 
-        if ctx.voice_client and (ctx.voice_client.is_playing() or ctx.voice_client.is_paused()):
+        async with state.lock:
             state.skip_once = True
-            ctx.voice_client.stop()
-            await ctx.send(embed=self.info_embed("Skipped the song.", title="Skipped"))
-        else:
-            await ctx.send(embed=self.warning_embed("Nothing is playing!", title="Nothing Playing"))
+            vc.stop()
 
 ########################################################################################################################
 # QUEUE
