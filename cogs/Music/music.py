@@ -19,11 +19,10 @@ load_dotenv()
 ytdlp_utils.bug_reports_message = lambda *args, **kwargs: ""
 
 ytdl_format_options: dict[str, Any] = {
+    "format": "bestaudio[acodec=opus]/bestaudio/best",
     "noplaylist": True,
     "quiet": True,
     "default_search": "auto",
-    "verbose": True,
-    "cookiefile": "/app/secrets/cookies.txt",
     "js_runtimes": {
         "node": {}
     },
@@ -68,7 +67,9 @@ class GuildMusicState:
         self.queue_loop = False
         self.lock = asyncio.Lock()
         self.preloaded = None
+        self.preload_task = None
         self.now_playing_view = None
+        self.autoplay_history = []
 
 class MusicControls(discord.ui.View):
     def __init__(self, cog, guild_id: int):
@@ -295,6 +296,14 @@ class MusicControls(discord.ui.View):
         state = self.get_state()
         state.autoplay_mode = not state.autoplay_mode
 
+        if state.autoplay_mode and state.current_song is not None and not state.song_queue:
+            self.cog.schedule_preload_next(self.guild_id)
+        elif not state.autoplay_mode:
+            if state.preload_task and not state.preload_task.done():
+                state.preload_task.cancel()
+            state.preload_task = None
+            state.preloaded = None
+
         self.refresh_button_labels()
         await interaction.message.edit(
             embed=await self.cog.build_now_playing_embed(state),
@@ -406,6 +415,85 @@ class Music(commands.Cog):
         self.bot = bot
         self.guild_states = {}
 
+    def get_autoplay_search_terms(self, song: dict[str, Any]) -> tuple[str, str]:
+        raw_title = (song.get("title") or "").strip()
+        uploader = (song.get("uploader") or "").replace(" - Topic", "").replace("VEVO", "").strip()
+
+        cleaned_title = self.clean_lyrics_title(raw_title)
+
+        if " - " in cleaned_title:
+            artist, track = cleaned_title.split(" - ", 1)
+            artist = artist.strip()
+            track = track.strip()
+            if artist and track:
+                return artist, track
+
+        return uploader, cleaned_title
+
+    def remember_autoplay_track(self, state: GuildMusicState, song: dict[str, Any], max_items: int = 20):
+        signature = self.build_track_signature(song)
+        if not signature[0]:
+            return
+
+        if state.autoplay_history and state.autoplay_history[-1] == signature:
+            return
+
+        state.autoplay_history.append(signature)
+
+        if len(state.autoplay_history) > max_items:
+            state.autoplay_history = state.autoplay_history[-max_items:]
+
+    def normalise_track_text(self, text: str) -> str:
+        text = (text or "").lower()
+
+        text = re.sub(r"\(.*?\)|\[.*?\]|\{.*?\}", " ", text)
+
+        junk_words = [
+            "official video", "official audio", "official music video",
+            "lyrics", "lyric video", "audio", "video", "visualizer",
+            "sped up", "slowed", "reverb", "nightcore", "remastered",
+            "hd", "hq", "mv", "topic", "vevo", "radio edit",
+            "extended", "version", "live", "performance",
+            "feat", "ft", "featuring", "prod", "produced by"
+        ]
+
+        for word in junk_words:
+            text = re.sub(rf"\b{re.escape(word)}\b", " ", text)
+
+        text = text.replace("&", "and")
+
+        text = re.sub(r"[^a-z0-9\s]", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+
+        return text
+
+    def build_track_signature(self, song: dict[str, Any]) -> tuple[str, int]:
+        title = self.normalise_track_text(song.get("title") or "")
+        duration = int(song.get("duration") or 0)
+        return title, duration
+
+    def is_same_track(self, a: dict[str, Any], b: dict[str, Any]) -> bool:
+        a_title, a_duration = self.build_track_signature(a)
+        b_title, b_duration = self.build_track_signature(b)
+
+        if not a_title or not b_title:
+            return False
+
+        if a_title == b_title:
+            if a_duration <= 0 or b_duration <= 0:
+                return True
+            return abs(a_duration - b_duration) <= 4
+
+        return False
+
+    def schedule_preload_next(self, guild_id: int):
+        state = self.get_state(guild_id)
+
+        if state.preload_task and not state.preload_task.done():
+            state.preload_task.cancel()
+
+        state.preload_task = asyncio.create_task(self.preload_next(guild_id))
+
     async def _apply_current_mode_to_voice_client(
         self,
         guild_id: int,
@@ -513,38 +601,77 @@ class Music(commands.Cog):
             state.paused_at = None
             state.paused_total = 0.0
             state.queue_loop = False
+            if state.preload_task and not state.preload_task.done():
+                state.preload_task.cancel()
+                state.preload_task = None
             state.preloaded = None
+            state.autoplay_history.clear()
 
     async def preload_next(self, guild_id: int):
         state = self.get_state(guild_id)
 
-        if not state.song_queue:
-            state.preloaded = None
-            return
-
-        next_song = state.song_queue[0]
-        track_url = next_song.get("url") or next_song.get("webpage_url")
-
-        if not track_url:
-            state.preloaded = None
-            return
-
         try:
-            fresh_song = await self.get_song_info(track_url)
+            candidate = None
 
-            audio_url = fresh_song.get("audio_url")
-            if not audio_url:
-                state.preloaded = None
+            async with state.lock:
+                if state.preloaded is not None:
+                    return
+
+                if state.song_queue:
+                    candidate = state.song_queue[0].copy()
+                elif state.autoplay_mode and state.current_song is not None:
+                    candidate = ("autoplay", state.current_song.copy())
+                else:
+                    candidate = None
+
+            if candidate is None:
+                async with state.lock:
+                    state.preloaded = None
                 return
 
-            state.preloaded = {
+            if isinstance(candidate, tuple) and candidate[0] == "autoplay":
+                seed_song = candidate[1]
+                candidate = await self.get_autoplay_song(
+                    state,
+                    seed_song,
+                    requester=seed_song.get("requester")
+                )
+
+            if candidate is None:
+                async with state.lock:
+                    state.preloaded = None
+                return
+
+            track_url = candidate.get("url") or candidate.get("webpage_url")
+            if not track_url:
+                async with state.lock:
+                    state.preloaded = None
+                return
+
+            fresh_song = await self.get_song_info(track_url)
+            audio_url = fresh_song.get("audio_url")
+
+            if not audio_url:
+                async with state.lock:
+                    state.preloaded = None
+                return
+
+            preloaded_data = {
                 "track_url": track_url,
+                "queued_song": candidate,
                 "fresh_song": fresh_song,
                 "audio_url": audio_url
             }
 
-        except Exception:
-            state.preloaded = None
+            async with state.lock:
+                state.preloaded = preloaded_data
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"preload_next failed: {e}")
+            async with state.lock:
+                state.preloaded = None
 
     async def get_dominant_colour_from_url(self, url: str) -> discord.Colour:
         try:
@@ -749,70 +876,136 @@ class Music(commands.Cog):
         }
 
     async def get_autoplay_song(
-        self,
-        state: GuildMusicState,
-        seed_song: dict[str, Any],
-        requester=None
+            self,
+            state: GuildMusicState,
+            seed_song: dict[str, Any],
+            requester=None
     ) -> dict[str, Any] | None:
-        title = seed_song.get("title") or ""
-        uploader = seed_song.get("uploader") or ""
+        artist, track = self.get_autoplay_search_terms(seed_song)
 
-        search_query = f"{title} {uploader}".strip()
-        if not search_query:
-            return None
+        queries = []
 
-        loop = asyncio.get_running_loop()
+        if artist and track:
+            queries.extend([
+                f"ytsearch15:{artist} topic",
+                f"ytsearch15:{artist} songs",
+                f"ytsearch15:{artist} music",
+                f"ytsearch15:{artist} - {track}",
+                f"ytsearch15:{artist}",
+            ])
+        elif artist:
+            queries.extend([
+                f"ytsearch15:{artist} songs",
+                f"ytsearch15:{artist} music",
+                f"ytsearch15:{artist}",
+            ])
+        else:
+            title = (seed_song.get("title") or "").strip()
+            if title:
+                queries.extend([
+                    f"ytsearch15:{title}",
+                    f"ytsearch15:{title} music",
+                ])
 
-        try:
-            info = await loop.run_in_executor(
-                None,
-                lambda: ytdl.extract_info(
-                    f"ytsearch5:{search_query}",
-                    download=False
-                )
-            )
-        except Exception:
-            return None
-
-        info = cast(dict[str, Any], info)
-        entries = info.get("entries")
-
-        if not isinstance(entries, list):
+        if not queries:
             return None
 
         current_url = seed_song.get("webpage_url") or seed_song.get("url")
+        current_signature = self.build_track_signature(seed_song)
+
         queued_urls = {
             song.get("webpage_url") or song.get("url")
             for song in state.song_queue
         }
 
-        for entry in entries:
-            if not isinstance(entry, dict):
+        queued_signatures = {
+            self.build_track_signature(song)
+            for song in state.song_queue
+        }
+
+        recent_signatures = set(state.autoplay_history)
+
+        preloaded_url = None
+        preloaded_signature = None
+        if state.preloaded:
+            preloaded_song = state.preloaded.get("queued_song")
+            if isinstance(preloaded_song, dict):
+                preloaded_url = preloaded_song.get("webpage_url") or preloaded_song.get("url")
+                preloaded_signature = self.build_track_signature(preloaded_song)
+
+        loop = asyncio.get_running_loop()
+        relaxed_candidate = None
+
+        for query in queries:
+            try:
+                info = await loop.run_in_executor(
+                    None,
+                    lambda q=query: ytdl.extract_info(q, download=False)
+                )
+            except Exception as e:
+                print(f"Autoplay query failed for {query}: {e}")
                 continue
 
-            webpage_url = entry.get("webpage_url") or entry.get("original_url")
-            if not webpage_url:
+            info = cast(dict[str, Any], info)
+            entries = info.get("entries")
+
+            if not isinstance(entries, list) or not entries:
                 continue
 
-            if current_url and webpage_url == current_url:
-                continue
+            random.shuffle(entries)
 
-            if webpage_url in queued_urls:
-                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
 
-            return {
-                "url": webpage_url,
-                "title": entry.get("title", "Unknown"),
-                "webpage_url": webpage_url,
-                "thumbnail": entry.get("thumbnail"),
-                "duration": entry.get("duration") or 0,
-                "uploader": entry.get("uploader") or entry.get("channel") or "Unknown",
-                "views": entry.get("view_count"),
-                "likes": entry.get("like_count"),
-                "requester": requester
-            }
+                webpage_url = entry.get("webpage_url") or entry.get("original_url")
+                if not webpage_url:
+                    continue
 
-        return None
+                candidate = {
+                    "url": webpage_url,
+                    "title": entry.get("title", "Unknown"),
+                    "webpage_url": webpage_url,
+                    "thumbnail": entry.get("thumbnail"),
+                    "duration": entry.get("duration") or 0,
+                    "uploader": entry.get("uploader") or entry.get("channel") or "Unknown",
+                    "views": entry.get("view_count"),
+                    "likes": entry.get("like_count"),
+                    "requester": requester,
+                    "autoplay_generated": True,
+                }
+
+                candidate_signature = self.build_track_signature(candidate)
+
+                if current_url and webpage_url == current_url:
+                    continue
+
+                if webpage_url in queued_urls:
+                    continue
+
+                if preloaded_url and webpage_url == preloaded_url:
+                    continue
+
+                if candidate_signature == current_signature:
+                    continue
+
+                if self.is_same_track(candidate, seed_song):
+                    continue
+
+                if duplicate_in_queue := any(self.is_same_track(candidate, song) for song in state.song_queue):
+                    continue
+
+                if (
+                        candidate_signature not in queued_signatures
+                        and candidate_signature not in recent_signatures
+                        and (not preloaded_signature or candidate_signature != preloaded_signature)
+                ):
+                    return candidate
+
+                if relaxed_candidate is None:
+                    relaxed_candidate = candidate
+
+        return relaxed_candidate
 
     def format_time(self, seconds: float | int) -> str:
         seconds = max(0, int(seconds))
@@ -1131,7 +1324,21 @@ class Music(commands.Cog):
             else:
                 return await ctx.send(embed=self.warning_embed("Use `;autoplay`, `;autoplay on`, or `;autoplay off`.", title="Invalid Usage"))
 
-        await ctx.send(embed=self.info_embed(f"Autoplay is now **{'ON' if state.autoplay_mode else 'OFF'}**.", title="Autoplay Updated"))
+        await ctx.send(
+            embed=self.info_embed(
+                f"Autoplay is now **{'ON' if state.autoplay_mode else 'OFF'}**.",
+                title="Autoplay Updated"
+            )
+        )
+
+        if state.autoplay_mode and state.current_song is not None and not state.song_queue:
+            self.schedule_preload_next(ctx.guild.id)
+        elif not state.autoplay_mode:
+            if state.preload_task and not state.preload_task.done():
+                state.preload_task.cancel()
+            state.preload_task = None
+            state.preloaded = None
+
         await self.update_now_playing_embed(ctx.guild.id)
 
 ########################################################################################################################
@@ -1173,6 +1380,7 @@ class Music(commands.Cog):
             )
 
         state.song_queue.append(queue_song)
+        state.preloaded = None
 
         if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
             await ctx.send(
@@ -1186,45 +1394,87 @@ class Music(commands.Cog):
 
     async def play_next(self, ctx) -> None:
         state = self.get_state(ctx.guild.id)
+        vc = ctx.voice_client
+
+        if not vc or not vc.is_connected():
+            return
 
         should_disconnect = False
+        queued_song = None
+        fresh_song = None
+        audio_url = None
 
         async with state.lock:
-            if not ctx.voice_client or not ctx.voice_client.is_connected():
-                return
-
             if state.loop_song and state.current_song and not state.skip_once:
-                queued_song = state.current_song
+                queued_song = state.current_song.copy()
+                fresh_song = state.current_song.copy()
+                audio_url = state.current_song.get("audio_url")
             else:
                 state.skip_once = False
 
                 if not state.song_queue:
-                    if state.autoplay_mode and state.current_song is not None:
-                        auto_song = await self.get_autoplay_song(
-                            state,
-                            state.current_song,
-                            requester=ctx.guild.members.me if ctx.guild else None
-                        )
-                        if auto_song is not None:
-                            state.song_queue.append(auto_song)
-
-                    if not state.song_queue:
-                        should_disconnect = True
-                    else:
-                        should_disconnect = False
-
-                if should_disconnect:
-                    pass
+                    if state.preloaded is not None:
+                        queued_song = state.preloaded.get("queued_song")
+                        fresh_song = state.preloaded.get("fresh_song")
+                        audio_url = state.preloaded.get("audio_url")
+                        state.preloaded = None
                 else:
                     queued_song = state.song_queue.pop(0)
 
                     if state.queue_loop:
                         state.song_queue.append(queued_song.copy())
 
-                queued_song = state.song_queue.pop(0)
+                    track_url = queued_song.get("url") or queued_song.get("webpage_url")
 
-                if state.queue_loop:
-                    state.song_queue.append(queued_song.copy())
+                    if state.preloaded and state.preloaded.get("track_url") == track_url:
+                        fresh_song = state.preloaded.get("fresh_song")
+                        audio_url = state.preloaded.get("audio_url")
+                        state.preloaded = None
+
+        if queued_song is None:
+            if state.autoplay_mode and state.current_song is not None:
+                for attempt in range(3):
+                    try:
+                        auto_song = await self.get_autoplay_song(
+                            state,
+                            state.current_song,
+                            requester=state.current_song.get("requester")
+                        )
+                        if auto_song is not None:
+                            queued_song = auto_song
+                            break
+                    except Exception as e:
+                        print(f"Autoplay lookup failed on attempt {attempt + 1}: {e}")
+
+                    await asyncio.sleep(0.75)
+
+                    if state.preloaded is not None:
+                        queued_song = state.preloaded.get("queued_song")
+                        fresh_song = state.preloaded.get("fresh_song")
+                        audio_url = state.preloaded.get("audio_url")
+                        state.preloaded = None
+                        break
+
+            if queued_song is None:
+                print("Autoplay failed: no valid candidate found, disconnecting.")
+                should_disconnect = True
+
+        if should_disconnect:
+            await self.reset_state(ctx.guild.id, clear_queue=True)
+
+            if vc and vc.is_connected():
+                await vc.disconnect()
+
+            await ctx.channel.send(
+                embed=self.info_embed(
+                    "Queue finished. Disconnected from the voice channel.",
+                    title="Disconnected"
+                )
+            )
+            return
+
+        if queued_song is None:
+            return
 
         try:
             track_url = queued_song.get("url") or queued_song.get("webpage_url")
@@ -1247,13 +1497,10 @@ class Music(commands.Cog):
                 )
                 return await self.play_next(ctx)
 
-            if state.preloaded and state.preloaded.get("track_url") == track_url:
-                fresh_song = state.preloaded["fresh_song"]
-                audio_url = state.preloaded["audio_url"]
-                state.preloaded = None
-            else:
+            if fresh_song is None or not audio_url:
                 fresh_song = await self.get_song_info(track_url)
                 audio_url = fresh_song.get("audio_url")
+
         except Exception as e:
             await ctx.send(
                 embed=self.error_embed(
@@ -1285,19 +1532,11 @@ class Music(commands.Cog):
                 "likes": fresh_song.get("likes", queued_song.get("likes")),
                 "requester": queued_song.get("requester"),
                 "source_platform": queued_song.get("source_platform", "youtube"),
+                "autoplay_generated": queued_song.get("autoplay_generated", False),
             }
 
-            if should_disconnect:
-                await self.reset_state(ctx.guild.id, clear_queue=True)
-
-                await ctx.voice_client.disconnect()
-                await ctx.channel.send(
-                    embed=self.info_embed(
-                        "Queue finished. Disconnected from the voice channel.",
-                        title="Disconnected"
-                    )
-                )
-                return
+            if state.current_song.get("autoplay_generated"):
+                self.remember_autoplay_track(state, state.current_song)
 
             thumbnail = state.current_song.get("thumbnail")
             if thumbnail:
@@ -1327,11 +1566,10 @@ class Music(commands.Cog):
 
             future.add_done_callback(_log_future_result)
 
-        if not ctx.voice_client or not ctx.voice_client.is_connected():
+        if not vc or not vc.is_connected():
             return
 
-        ctx.voice_client.play(source, after=after_playback)
-        asyncio.create_task(self.preload_next(ctx.guild.id))
+        vc.play(source, after=after_playback)
 
         async with state.lock:
             state.play_started_at = time.monotonic()
@@ -1350,6 +1588,8 @@ class Music(commands.Cog):
 
             state.now_playing_message = None
             state.now_playing_view = None
+
+        self.schedule_preload_next(ctx.guild.id)
 
         view = MusicControls(self, ctx.guild.id)
         state.now_playing_view = view
@@ -1852,6 +2092,7 @@ class Music(commands.Cog):
 
         was_idle = not ctx.voice_client.is_playing() and not ctx.voice_client.is_paused()
         state.song_queue.append(queue_song)
+        state.preloaded = None
 
         if was_idle:
             await ctx.send(

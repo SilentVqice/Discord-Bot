@@ -2,29 +2,10 @@ import os
 import logging
 import discord
 from discord.ext import commands
-from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
 token = os.getenv("DISCORD_TOKEN")
-
-COOKIES_PATH = Path("/app/secrets/cookies.txt")
-cookies_text = os.getenv("YOUTUBE_COOKIES")
-
-if cookies_text:
-    stripped = cookies_text.lstrip()
-
-    if stripped.startswith("# robots.txt"):
-        raise RuntimeError("You pasted YouTube robots.txt instead of a Netscape cookies file.")
-
-    if not stripped.startswith("# Netscape HTTP Cookie File"):
-        raise RuntimeError("YOUTUBE_COOKIES is not in Netscape cookies.txt format.")
-
-    COOKIES_PATH.parent.mkdir(parents=True, exist_ok=True)
-    COOKIES_PATH.write_text(cookies_text, encoding="utf-8")
-    print(f"Wrote cookies file to {COOKIES_PATH}")
-else:
-    print("YOUTUBE_COOKIES is not set")
 
 handler = logging.FileHandler(filename="discord.log", encoding="utf-8", mode="w")
 
@@ -36,19 +17,20 @@ intents.presences = True
 
 test_guild_id = 1483248089757388861
 
-
 class MyBot(commands.Bot):
     async def setup_hook(self):
         await self.load_extension("cogs.Music.music")
         await self.load_extension("cogs.Utility.utility")
         await self.load_extension("cogs.Utility.tickets")
         await self.load_extension("cogs.Utility.logs")
+        await self.load_extension("cogs.Utility.help")
         await self.load_extension("cogs.Moderation.moderation")
         await self.load_extension("cogs.Fun.games")
         await self.load_extension("cogs.Fun.quiz")
         await self.load_extension("cogs.Fun.images")
         await self.load_extension("cogs.Fun.social")
         await self.load_extension("cogs.Fun.fun")
+        await self.load_extension("cogs.Fun.ai")
 
         guild = discord.Object(id=test_guild_id)
         self.tree.copy_global_to(guild=guild)

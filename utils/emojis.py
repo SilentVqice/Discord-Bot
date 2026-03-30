@@ -2,6 +2,8 @@ EMOJIS = {
     "success": "<:success:1487727645184495768>",
     "error": "<:error:1487727658442690681>",
     "neutral": "<:neutral:1487727665258561566>",
+    "arrow_down": "<:arrow_down:1488176704437620886>",
+    "arrow_right": "<:arrow_right:1488176691145740400>",
     "musicduration": "<:musicduration:1487812613579739247>",
     "musicuploader": "<:musicuploader:1487815369354903559>",
     "musicstatus": "<:musicstatus:1487815384852856872>",
