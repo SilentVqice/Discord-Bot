@@ -2,11 +2,20 @@ import os
 import logging
 import discord
 from discord.ext import commands
-from discord import app_commands
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
 token = os.getenv("DISCORD_TOKEN")
+
+cookies_text = os.getenv("YOUTUBE_COOKIES")
+cookies_path = Path("/app/secrets/cookies.txt")
+
+if cookies_text:
+    cookies_path.parent.mkdir(parents=True, exist_ok=True)
+    cookies_path.write_text(cookies_text, encoding="utf-8")
+    print("cookies exists:", cookies_path.exists())
+    print("cookies path:", cookies_path)
 
 handler = logging.FileHandler(filename="discord.log", encoding="utf-8", mode="w")
 

@@ -23,6 +23,7 @@ ytdl_format_options: dict[str, Any] = {
     "noplaylist": True,
     "quiet": True,
     "default_search": "auto",
+    "cookiefile": "/app/secrets/cookies.txt",
     "js_runtimes": {
         "node": {}
     },
