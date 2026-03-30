@@ -8,14 +8,23 @@ from dotenv import load_dotenv
 load_dotenv()
 token = os.getenv("DISCORD_TOKEN")
 
+COOKIES_PATH = Path("/app/secrets/cookies.txt")
 cookies_text = os.getenv("YOUTUBE_COOKIES")
-cookies_path = Path("/app/secrets/cookies.txt")
 
 if cookies_text:
-    cookies_path.parent.mkdir(parents=True, exist_ok=True)
-    cookies_path.write_text(cookies_text, encoding="utf-8")
-    print("cookies exists:", cookies_path.exists())
-    print("cookies path:", cookies_path)
+    stripped = cookies_text.lstrip()
+
+    if stripped.startswith("# robots.txt"):
+        raise RuntimeError("You pasted YouTube robots.txt instead of a Netscape cookies file.")
+
+    if not stripped.startswith("# Netscape HTTP Cookie File"):
+        raise RuntimeError("YOUTUBE_COOKIES is not in Netscape cookies.txt format.")
+
+    COOKIES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    COOKIES_PATH.write_text(cookies_text, encoding="utf-8")
+    print(f"Wrote cookies file to {COOKIES_PATH}")
+else:
+    print("YOUTUBE_COOKIES is not set")
 
 handler = logging.FileHandler(filename="discord.log", encoding="utf-8", mode="w")
 
