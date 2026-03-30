@@ -31,7 +31,6 @@ class MyBot(commands.Bot):
         await self.load_extension("cogs.Fun.images")
         await self.load_extension("cogs.Fun.social")
         await self.load_extension("cogs.Fun.fun")
-        await self.load_extension("cogs.Fun.ai")
 
         guild = discord.Object(id=test_guild_id)
         self.tree.copy_global_to(guild=guild)
