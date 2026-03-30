@@ -19,7 +19,7 @@ load_dotenv()
 ytdlp_utils.bug_reports_message = lambda *args, **kwargs: ""
 
 ytdl_format_options: dict[str, Any] = {
-    "format": "bestaudio[acodec=opus]/bestaudio/best",
+    "format": "bestaudio/best",
     "noplaylist": True,
     "quiet": True,
     "default_search": "auto",
