@@ -56,7 +56,6 @@ class MyBot(commands.Bot):
     async def on_ready(self):
         print(f"Logged in as {self.user} ({self.user.id})")
 
-
 bot = MyBot(
     command_prefix=";",
     intents=intents,
